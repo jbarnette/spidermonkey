@@ -267,6 +267,10 @@ NSPR_LIBS	= @NSPR_LIBS@
 
 USE_DEPENDENT_LIBS = @USE_DEPENDENT_LIBS@
 
+JS_NATIVE_EDITLINE = @JS_NATIVE_EDITLINE@
+JS_DISABLE_SHELL   = @JS_DISABLE_SHELL@
+EDITLINE_LIBS      = @EDITLINE_LIBS@
+
 # MKSHLIB_FORCE_ALL is used to force the linker to include all object
 # files present in an archive. MKSHLIB_UNFORCE_ALL reverts the linker
 # to normal behavior. Makefile's that create shared libraries out of
