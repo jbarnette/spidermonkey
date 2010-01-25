@@ -366,6 +366,9 @@ struct JSThreadsHashEntry {
     JSThread            *thread;
 };
 
+extern JSThread *
+js_CurrentThread(JSRuntime *rt);
+
 /*
  * The function takes the GC lock and does not release in successful return.
  * On error (out of memory) the function releases the lock but delegates
@@ -477,7 +480,7 @@ struct JSRuntime {
      *
      * FIXME Once scopes are GC'd (bug 505004), this will be obsolete.
      */
-    uint8              gcRegenShapesScopeFlag;
+    uint8               gcRegenShapesScopeFlag;
 
 #ifdef JS_GC_ZEAL
     jsrefcount          gcZeal;
@@ -539,6 +542,15 @@ struct JSRuntime {
 
     /* Per runtime debug hooks -- see jsprvtd.h and jsdbgapi.h. */
     JSDebugHooks        globalDebugHooks;
+
+#ifdef JS_TRACER
+    /* True if any debug hooks not supported by the JIT are enabled. */
+    bool debuggerInhibitsJIT() const {
+        return (globalDebugHooks.interruptHandler ||
+                globalDebugHooks.callHook ||
+                globalDebugHooks.objectHook);
+    }
+#endif
 
     /* More debugging state, see jsdbgapi.c. */
     JSCList             trapList;
@@ -1101,7 +1113,7 @@ struct JSContext {
     JSGCDoubleCell      *doubleFreeList;
 
     /* Debug hooks associated with the current context. */
-    JSDebugHooks        *debugHooks;
+    const JSDebugHooks  *debugHooks;
 
     /* Security callbacks that override any defined on the runtime. */
     JSSecurityCallbacks *securityCallbacks;
@@ -1120,9 +1132,31 @@ struct JSContext {
      */
     InterpState         *interpState;
     VMSideExit          *bailExit;
+
+    /*
+     * True if traces may be executed. Invariant: The value of jitEnabled is
+     * always equal to the expression in updateJITEnabled below.
+     *
+     * This flag and the fields accessed by updateJITEnabled are written only
+     * in runtime->gcLock, to avoid race conditions that would leave the wrong
+     * value in jitEnabled. (But the interpreter reads this without
+     * locking. That can race against another thread setting debug hooks, but
+     * we always read cx->debugHooks without locking anyway.)
+     */
+    bool                 jitEnabled;
 #endif
 
 #ifdef __cplusplus /* Allow inclusion from LiveConnect C files, */
+
+    /* Caller must be holding runtime->gcLock. */
+    void updateJITEnabled() {
+#ifdef JS_TRACER
+        jitEnabled = ((options & JSOPTION_JIT) &&
+                      !runtime->debuggerInhibitsJIT() &&
+                      debugHooks == &runtime->globalDebugHooks);
+#endif
+    }
+
 
 #ifdef JS_THREADSAFE
     inline void createDeallocatorTask() {
@@ -1275,20 +1309,28 @@ FrameAtomBase(JSContext *cx, JSStackFrame *fp)
 class JSAutoTempValueRooter
 {
   public:
-    JSAutoTempValueRooter(JSContext *cx, size_t len, jsval *vec)
+    JSAutoTempValueRooter(JSContext *cx, size_t len, jsval *vec
+                          JS_GUARD_OBJECT_NOTIFIER_PARAM)
         : mContext(cx) {
+        JS_GUARD_OBJECT_NOTIFIER_INIT;
         JS_PUSH_TEMP_ROOT(mContext, len, vec, &mTvr);
     }
-    explicit JSAutoTempValueRooter(JSContext *cx, jsval v = JSVAL_NULL)
+    explicit JSAutoTempValueRooter(JSContext *cx, jsval v = JSVAL_NULL
+                                   JS_GUARD_OBJECT_NOTIFIER_PARAM)
         : mContext(cx) {
+        JS_GUARD_OBJECT_NOTIFIER_INIT;
         JS_PUSH_SINGLE_TEMP_ROOT(mContext, v, &mTvr);
     }
-    JSAutoTempValueRooter(JSContext *cx, JSString *str)
+    JSAutoTempValueRooter(JSContext *cx, JSString *str
+                          JS_GUARD_OBJECT_NOTIFIER_PARAM)
         : mContext(cx) {
+        JS_GUARD_OBJECT_NOTIFIER_INIT;
         JS_PUSH_TEMP_ROOT_STRING(mContext, str, &mTvr);
     }
-    JSAutoTempValueRooter(JSContext *cx, JSObject *obj)
+    JSAutoTempValueRooter(JSContext *cx, JSObject *obj
+                          JS_GUARD_OBJECT_NOTIFIER_PARAM)
         : mContext(cx) {
+        JS_GUARD_OBJECT_NOTIFIER_INIT;
         JS_PUSH_TEMP_ROOT_OBJECT(mContext, obj, &mTvr);
     }
 
@@ -1309,13 +1351,16 @@ class JSAutoTempValueRooter
 #endif
 
     JSTempValueRooter mTvr;
+    JS_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 
 class JSAutoTempIdRooter
 {
   public:
-    explicit JSAutoTempIdRooter(JSContext *cx, jsid id = INT_TO_JSID(0))
+    explicit JSAutoTempIdRooter(JSContext *cx, jsid id = INT_TO_JSID(0)
+                                JS_GUARD_OBJECT_NOTIFIER_PARAM)
         : mContext(cx) {
+        JS_GUARD_OBJECT_NOTIFIER_INIT;
         JS_PUSH_SINGLE_TEMP_ROOT(mContext, ID_TO_VALUE(id), &mTvr);
     }
 
@@ -1329,15 +1374,18 @@ class JSAutoTempIdRooter
   private:
     JSContext *mContext;
     JSTempValueRooter mTvr;
+    JS_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 
 /* The auto-root for enumeration object and its state. */
 class JSAutoEnumStateRooter : public JSTempValueRooter
 {
   public:
-    JSAutoEnumStateRooter(JSContext *cx, JSObject *obj, jsval *statep)
+    JSAutoEnumStateRooter(JSContext *cx, JSObject *obj, jsval *statep
+                          JS_GUARD_OBJECT_NOTIFIER_PARAM)
         : mContext(cx), mStatep(statep)
     {
+        JS_GUARD_OBJECT_NOTIFIER_INIT;
         JS_ASSERT(obj);
         JS_ASSERT(statep);
         JS_PUSH_TEMP_ROOT_COMMON(cx, obj, this, JSTVU_ENUMERATOR, object);
@@ -1355,13 +1403,16 @@ class JSAutoEnumStateRooter : public JSTempValueRooter
   private:
     JSContext   *mContext;
     jsval       *mStatep;
+    JS_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 
 class JSAutoResolveFlags
 {
   public:
-    JSAutoResolveFlags(JSContext *cx, uintN flags)
+    JSAutoResolveFlags(JSContext *cx, uintN flags
+                       JS_GUARD_OBJECT_NOTIFIER_PARAM)
         : mContext(cx), mSaved(cx->resolveFlags) {
+        JS_GUARD_OBJECT_NOTIFIER_INIT;
         cx->resolveFlags = flags;
     }
 
@@ -1370,6 +1421,7 @@ class JSAutoResolveFlags
   private:
     JSContext *mContext;
     uintN mSaved;
+    JS_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 
 #endif /* __cplusplus */
@@ -1416,6 +1468,9 @@ class JSAutoResolveFlags
                                                      JSVERSION_MASK))
 #define JS_HAS_XML_OPTION(cx)           ((cx)->version & JSVERSION_HAS_XML || \
                                          JSVERSION_NUMBER(cx) >= JSVERSION_1_6)
+
+extern JSThreadData *
+js_CurrentThreadData(JSRuntime *rt);
 
 extern JSBool
 js_InitThreads(JSRuntime *rt);

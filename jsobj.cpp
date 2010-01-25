@@ -92,6 +92,7 @@
 #endif
 
 #include "jsatominlines.h"
+#include "jsobjinlines.h"
 #include "jsscriptinlines.h"
 
 #include "jsautooplen.h"
@@ -1257,6 +1258,7 @@ obj_eval(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
     fp = js_GetTopStackFrame(cx);
     caller = js_GetScriptedCaller(cx, fp);
     indirectCall = (caller && caller->regs && *caller->regs->pc != JSOP_EVAL);
+    uintN staticLevel = caller->script->staticLevel + 1;
 
     /*
      * This call to js_GetWrappedObject is safe because of the security checks
@@ -1398,7 +1400,7 @@ obj_eval(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
 
     tcflags = TCF_COMPILE_N_GO;
     if (caller) {
-        tcflags |= TCF_PUT_STATIC_LEVEL(caller->script->staticLevel + 1);
+        tcflags |= TCF_PUT_STATIC_LEVEL(staticLevel);
         principals = JS_EvalFramePrincipals(cx, fp, caller);
         file = js_ComputeFilename(cx, caller, principals, &line);
     } else {
@@ -1412,13 +1414,14 @@ obj_eval(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
 
     /* Cache local eval scripts indexed by source qualified by scope. */
     bucket = EvalCacheHash(cx, str);
-    if (caller->fun) {
+    if (!indirectCall && argc == 1 && caller->fun) {
         uintN count = 0;
         JSScript **scriptp = bucket;
 
         EVAL_CACHE_METER(probe);
         while ((script = *scriptp) != NULL) {
             if ((script->flags & JSSF_SAVED_CALLER_FUN) &&
+                script->staticLevel == staticLevel &&
                 script->version == cx->version &&
                 (script->principals == principals ||
                  (principals->subsume(principals, script->principals) &&
@@ -1458,6 +1461,7 @@ obj_eval(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
                         }
                         if (i < 0 ||
                             STOBJ_GET_PARENT(objarray->vector[i]) == scopeobj) {
+                            JS_ASSERT(staticLevel == script->staticLevel);
                             EVAL_CACHE_METER(hit);
                             *scriptp = script->u.nextToGC;
                             script->u.nextToGC = NULL;
@@ -2015,8 +2019,9 @@ InitScopeForObject(JSContext* cx, JSObject* obj, JSObject* proto, JSObjectOps* o
     /* Share proto's emptyScope only if obj is similar to proto. */
     JSClass *clasp = OBJ_GET_CLASS(cx, obj);
     JSScope *scope;
-    if (proto && js_ObjectIsSimilarToProto(cx, obj, ops, clasp, proto)) {
-        scope = OBJ_SCOPE(proto)->getEmptyScope(cx, clasp);
+    if (proto && OBJ_IS_NATIVE(proto) &&
+        (scope = OBJ_SCOPE(proto))->canProvideEmptyScope(ops, clasp)) {
+        scope = scope->getEmptyScope(cx, clasp);
         if (!scope)
             goto bad;
     } else {
@@ -2170,6 +2175,31 @@ js_Object(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
 
 #ifdef JS_TRACER
 
+JSObject*
+js_NewObjectWithClassProto(JSContext *cx, JSClass *clasp, JSObject *proto,
+                           jsval privateSlotValue)
+{
+    JS_ASSERT(!clasp->getObjectOps);
+    JS_ASSERT(proto->map->ops == &js_ObjectOps);
+
+    JSObject* obj = js_NewGCObject(cx, GCX_OBJECT);
+    if (!obj)
+        return NULL;
+
+    obj->initSharingEmptyScope(clasp, proto, proto->getParent(), privateSlotValue);
+    return obj;
+}
+
+JSObject* FASTCALL
+js_Object_tn(JSContext* cx, JSObject* proto)
+{
+    JS_ASSERT(!(js_ObjectClass.flags & JSCLASS_HAS_PRIVATE));
+    return js_NewObjectWithClassProto(cx, &js_ObjectClass, proto, JSVAL_VOID);
+}
+
+JS_DEFINE_TRCINFO_1(js_Object,
+    (2, (extern, CONSTRUCTOR_RETRY, js_Object_tn, CONTEXT, CALLEE_PROTOTYPE, 0, 0)))
+
 static inline JSObject*
 NewNativeObject(JSContext* cx, JSClass* clasp, JSObject* proto,
                 JSObject *parent, jsval privateSlotValue)
@@ -2182,17 +2212,6 @@ NewNativeObject(JSContext* cx, JSClass* clasp, JSObject* proto,
     obj->init(clasp, proto, parent, privateSlotValue);
     return InitScopeForObject(cx, obj, proto, &js_ObjectOps) ? obj : NULL;
 }
-
-JSObject* FASTCALL
-js_Object_tn(JSContext* cx, JSObject* proto)
-{
-    JS_ASSERT(!(js_ObjectClass.flags & JSCLASS_HAS_PRIVATE));
-    return NewNativeObject(cx, &js_ObjectClass, proto, proto->getParent(),
-                           JSVAL_VOID);
-}
-
-JS_DEFINE_TRCINFO_1(js_Object,
-    (2, (extern, CONSTRUCTOR_RETRY, js_Object_tn, CONTEXT, CALLEE_PROTOTYPE, 0, 0)))
 
 JSObject* FASTCALL
 js_NewInstance(JSContext *cx, JSClass *clasp, JSObject *ctor)
@@ -2942,6 +2961,21 @@ js_InitClass(JSContext *cx, JSObject *obj, JSObject *parent_proto,
         goto bad;
     }
 
+    /*
+     * Make sure proto's scope's emptyScope is available to be shared by
+     * objects of this class.  JSScope::emptyScope is a one-slot cache. If we
+     * omit this, some other class could snap it up. (The risk is particularly
+     * great for Object.prototype.)
+     *
+     * All callers of JSObject::initSharingEmptyScope depend on this.
+     */
+    if (OBJ_IS_NATIVE(proto)) {
+        JSScope *scope = OBJ_SCOPE(proto)->getEmptyScope(cx, clasp);
+        if (!scope)
+            goto bad;
+        scope->drop(cx, NULL);
+    }
+
     /* If this is a standard class, cache its prototype. */
     if (key != JSProto_Null && !js_SetClassObject(cx, obj, key, ctor))
         goto bad;
@@ -3104,28 +3138,6 @@ js_GetClassId(JSContext *cx, JSClass *clasp, jsid *idp)
         *idp = ATOM_TO_JSID(atom);
     }
     return JS_TRUE;
-}
-
-JSObject*
-js_NewNativeObject(JSContext *cx, JSClass *clasp, JSObject *proto,
-                   jsval privateSlotValue)
-{
-    JS_ASSERT(!clasp->getObjectOps);
-    JS_ASSERT(proto->map->ops == &js_ObjectOps);
-    JS_ASSERT(OBJ_GET_CLASS(cx, proto) == clasp);
-
-    JSObject* obj = js_NewGCObject(cx, GCX_OBJECT);
-    if (!obj)
-        return NULL;
-
-    JSScope *scope = OBJ_SCOPE(proto)->getEmptyScope(cx, clasp);
-    if (!scope) {
-        JS_ASSERT(!obj->map);
-        return NULL;
-    }
-    obj->map = scope;
-    obj->init(clasp, proto, proto->getParent(), privateSlotValue);
-    return obj;
 }
 
 JS_BEGIN_EXTERN_C
@@ -3684,11 +3696,12 @@ js_DefineNativeProperty(JSContext *cx, JSObject *obj, jsid id, jsval value,
         /* Add a new property, or replace an existing one of the same id. */
         if (clasp->flags & JSCLASS_SHARE_ALL_PROPERTIES)
             attrs |= JSPROP_SHARED;
+
+        added = !scope->lookup(id);
         sprop = scope->add(cx, id, getter, setter, SPROP_INVALID_SLOT, attrs,
                            flags, shortid);
         if (!sprop)
             goto error;
-        added = true;
     }
 
     /* Store value before calling addProperty, in case the latter GC's. */
@@ -4146,15 +4159,9 @@ js_NativeSet(JSContext *cx, JSObject *obj, JSScopeProperty *sprop, jsval *vp)
          * Allow API consumers to create shared properties with stub setters.
          * Such properties lack value storage, so setting them is like writing
          * to /dev/null.
-         *
-         * But we can't short-circuit if there's a scripted getter or setter
-         * since we might need to throw. In that case, we let SPROP_SET
-         * decide whether to throw an exception. See bug 478047.
          */
-        if (!(sprop->attrs & JSPROP_GETTER) && SPROP_HAS_STUB_SETTER(sprop)) {
-            JS_ASSERT(!(sprop->attrs & JSPROP_SETTER));
+        if (SPROP_HAS_STUB_SETTER(sprop))
             return JS_TRUE;
-        }
     }
 
     sample = cx->runtime->propertyRemovals;

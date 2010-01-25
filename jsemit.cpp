@@ -2109,9 +2109,9 @@ BindNameToSlot(JSContext *cx, JSCodeGenerator *cg, JSParseNode *pn)
         if (op != JSOP_NAME)
             return JS_TRUE;
 
-#ifdef DEBUG
         JSStackFrame *caller = cg->compiler->callerFrame;
         JS_ASSERT(caller);
+        JS_ASSERT(caller->script);
 
         JSTreeContext *tc = cg;
         while (tc->staticLevel != level)
@@ -2120,10 +2120,14 @@ BindNameToSlot(JSContext *cx, JSCodeGenerator *cg, JSParseNode *pn)
 
         JSCodeGenerator *evalcg = (JSCodeGenerator *) tc;
         JS_ASSERT(evalcg->flags & TCF_COMPILE_N_GO);
-        JS_ASSERT(!(evalcg->flags & TCF_IN_FOR_INIT));
-        JS_ASSERT(caller->script);
         JS_ASSERT(caller->fun && caller->varobj == evalcg->scopeChain);
-#endif
+
+        /*
+         * Don't generate upvars on the left side of a for loop. See
+         * bug 470758 and bug 520513.
+         */
+        if (evalcg->flags & TCF_IN_FOR_INIT)
+            return JS_TRUE;
 
         if (cg->staticLevel == level) {
             pn->pn_op = JSOP_GETUPVAR;
@@ -2138,7 +2142,8 @@ BindNameToSlot(JSContext *cx, JSCodeGenerator *cg, JSParseNode *pn)
     uintN skip = cg->staticLevel - level;
     if (skip != 0) {
         JS_ASSERT(cg->flags & TCF_IN_FUNCTION);
-        JS_ASSERT(cg->lexdeps.lookup(atom));
+        JS_ASSERT_IF(UPVAR_FRAME_SLOT(cookie) != CALLEE_UPVAR_SLOT,
+                     cg->lexdeps.lookup(atom));
         JS_ASSERT(JOF_OPTYPE(op) == JOF_ATOM);
         JS_ASSERT(cg->fun->u.i.skipmin <= skip);
 
@@ -2205,7 +2210,7 @@ BindNameToSlot(JSContext *cx, JSCodeGenerator *cg, JSParseNode *pn)
             }
 
             uintN slot = UPVAR_FRAME_SLOT(cookie);
-            if (dn_kind != JSDefinition::ARG) {
+            if (slot != CALLEE_UPVAR_SLOT && dn_kind != JSDefinition::ARG) {
                 JSTreeContext *tc = cg;
                 do {
                     tc = tc->parent;
@@ -4485,8 +4490,8 @@ js_EmitTree(JSContext *cx, JSCodeGenerator *cg, JSParseNode *pn)
         jmp = EmitJump(cx, cg, JSOP_GOTO, 0);
         if (jmp < 0)
             return JS_FALSE;
-        top = CG_OFFSET(cg);
-        if (!js_Emit1(cx, cg, JSOP_TRACE))
+        top = js_Emit1(cx, cg, JSOP_TRACE);
+        if (top < 0)
             return JS_FALSE;
         if (!js_EmitTree(cx, cg, pn->pn_right))
             return JS_FALSE;
@@ -4508,8 +4513,8 @@ js_EmitTree(JSContext *cx, JSCodeGenerator *cg, JSParseNode *pn)
             return JS_FALSE;
 
         /* Compile the loop body. */
-        top = CG_OFFSET(cg);
-        if (!js_Emit1(cx, cg, JSOP_TRACE))
+        top = js_Emit1(cx, cg, JSOP_TRACE);
+        if (top < 0)
             return JS_FALSE;
         js_PushStatement(cg, &stmtInfo, STMT_DO_LOOP, top);
         if (!js_EmitTree(cx, cg, pn->pn_left))
@@ -4608,7 +4613,7 @@ js_EmitTree(JSContext *cx, JSCodeGenerator *cg, JSParseNode *pn)
 
             top = CG_OFFSET(cg);
             SET_STATEMENT_TOP(&stmtInfo, top);
-            if (!js_Emit1(cx, cg, JSOP_TRACE))
+            if (js_Emit1(cx, cg, JSOP_TRACE) < 0)
                 return JS_FALSE;
 
 #ifdef DEBUG
@@ -4837,7 +4842,7 @@ js_EmitTree(JSContext *cx, JSCodeGenerator *cg, JSParseNode *pn)
             SET_STATEMENT_TOP(&stmtInfo, top);
 
             /* Emit code for the loop body. */
-            if (!js_Emit1(cx, cg, JSOP_TRACE))
+            if (js_Emit1(cx, cg, JSOP_TRACE) < 0)
                 return JS_FALSE;
             if (!js_EmitTree(cx, cg, pn->pn_right))
                 return JS_FALSE;
@@ -6011,8 +6016,10 @@ js_EmitTree(JSContext *cx, JSCodeGenerator *cg, JSParseNode *pn)
         }
 #endif
         pn2 = pn->pn_kid;
-        if (op == JSOP_TYPEOF && pn2->pn_type != TOK_NAME)
-            op = JSOP_TYPEOFEXPR;
+
+        /* See js_FoldConstants for why this assertion holds true. */
+        JS_ASSERT_IF(op == JSOP_TYPEOF, pn2->pn_type == TOK_NAME);
+
         oldflags = cg->flags;
         cg->flags &= ~TCF_IN_FOR_INIT;
         if (!js_EmitTree(cx, cg, pn2))
@@ -6174,8 +6181,8 @@ js_EmitTree(JSContext *cx, JSCodeGenerator *cg, JSParseNode *pn)
         jmp = js_Emit3(cx, cg, JSOP_FILTER, 0, 0);
         if (jmp < 0)
             return JS_FALSE;
-        top = CG_OFFSET(cg);
-        if (!js_Emit1(cx, cg, JSOP_TRACE))
+        top = js_Emit1(cx, cg, JSOP_TRACE);
+        if (top < 0)
             return JS_FALSE;
         if (!js_EmitTree(cx, cg, pn->pn_right))
             return JS_FALSE;

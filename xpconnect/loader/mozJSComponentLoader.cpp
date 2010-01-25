@@ -955,23 +955,6 @@ mozJSComponentLoader::StartFastLoad(nsIFastLoadService *flSvc)
 
                 nsCOMPtr<nsIFastLoadReadControl>
                     readControl(do_QueryInterface(mFastLoadInput));
-                if (readControl) {
-                    // Verify checksum, using the FastLoadService's
-                    // checksum cache to avoid computing more than once
-                    // per session.
-                    PRUint32 checksum;
-                    rv = readControl->GetChecksum(&checksum);
-                    if (NS_SUCCEEDED(rv)) {
-                        PRUint32 verified;
-                        rv = flSvc->ComputeChecksum(mFastLoadFile,
-                                                    readControl, &verified);
-                        if (NS_SUCCEEDED(rv) && verified != checksum) {
-                            LOG(("Incorrect checksum detected"));
-                            rv = NS_ERROR_FAILURE;
-                        }
-                    }
-                }
-
                 if (NS_SUCCEEDED(rv)) {
                     /* Get the JS bytecode version number and validate it. */
                     PRUint32 version;
@@ -1186,7 +1169,7 @@ mozJSComponentLoader::GlobalForLocation(nsILocalFile *aComponent,
 #ifdef XPCONNECT_STANDALONE
     localFile->GetNativePath(nativePath);
 #else
-    NS_GetURLSpecFromFile(aComponent, nativePath);
+    NS_GetURLSpecFromActualFile(aComponent, nativePath);
 #endif
 
     // Before compiling the script, first check to see if we have it in

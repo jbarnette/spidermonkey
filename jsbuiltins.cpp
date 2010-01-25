@@ -61,6 +61,7 @@
 #include "jsvector.h"
 
 #include "jsatominlines.h"
+#include "jsobjinlines.h"
 
 using namespace avmplus;
 using namespace nanojit;
@@ -393,15 +394,8 @@ js_NewNullClosure(JSContext* cx, JSObject* funobj, JSObject* proto, JSObject* pa
     if (!closure)
         return NULL;
 
-    JSScope *scope = OBJ_SCOPE(proto)->getEmptyScope(cx, &js_FunctionClass);
-    if (!scope) {
-        JS_ASSERT(!closure->map);
-        return NULL;
-    }
-
-    closure->map = scope;
-    closure->init(&js_FunctionClass, proto, parent,
-                  reinterpret_cast<jsval>(fun));
+    closure->initSharingEmptyScope(&js_FunctionClass, proto, parent,
+                                   reinterpret_cast<jsval>(fun));
     return closure;
 }
 JS_DEFINE_CALLINFO_4(extern, OBJECT, js_NewNullClosure, CONTEXT, OBJECT, OBJECT, OBJECT, 0, 0)

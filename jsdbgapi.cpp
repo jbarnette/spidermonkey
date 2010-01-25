@@ -325,23 +325,67 @@ JS_HandleTrap(JSContext *cx, JSScript *script, jsbytecode *pc, jsval *rval)
     return status;
 }
 
+#ifdef JS_TRACER
+static void
+JITInhibitingHookChange(JSRuntime *rt, bool wasInhibited)
+{
+    if (wasInhibited) {
+        if (!rt->debuggerInhibitsJIT()) {
+            for (JSCList *cl = rt->contextList.next; cl != &rt->contextList; cl = cl->next)
+                js_ContextFromLinkField(cl)->updateJITEnabled();
+        }
+    } else if (rt->debuggerInhibitsJIT()) {
+        for (JSCList *cl = rt->contextList.next; cl != &rt->contextList; cl = cl->next)
+            js_ContextFromLinkField(cl)->jitEnabled = false;
+    }
+}
+
+static void
+LeaveTraceRT(JSRuntime *rt)
+{
+    JSThreadData *data = js_CurrentThreadData(rt);
+    JSContext *cx = data ? data->traceMonitor.tracecx : NULL;
+    JS_UNLOCK_GC(rt);
+
+    if (cx)
+        js_LeaveTrace(cx);
+}
+#endif
+
 JS_PUBLIC_API(JSBool)
 JS_SetInterrupt(JSRuntime *rt, JSTrapHandler handler, void *closure)
 {
+#ifdef JS_TRACER
+    JS_LOCK_GC(rt);
+    bool wasInhibited = rt->debuggerInhibitsJIT();
+#endif
     rt->globalDebugHooks.interruptHandler = handler;
     rt->globalDebugHooks.interruptHandlerData = closure;
+#ifdef JS_TRACER
+    JITInhibitingHookChange(rt, wasInhibited);
+    JS_UNLOCK_GC(rt);
+    LeaveTraceRT(rt);
+#endif
     return JS_TRUE;
 }
 
 JS_PUBLIC_API(JSBool)
 JS_ClearInterrupt(JSRuntime *rt, JSTrapHandler *handlerp, void **closurep)
 {
+#ifdef JS_TRACER
+    JS_LOCK_GC(rt);
+    bool wasInhibited = rt->debuggerInhibitsJIT();
+#endif
     if (handlerp)
-        *handlerp = (JSTrapHandler)rt->globalDebugHooks.interruptHandler;
+        *handlerp = rt->globalDebugHooks.interruptHandler;
     if (closurep)
         *closurep = rt->globalDebugHooks.interruptHandlerData;
     rt->globalDebugHooks.interruptHandler = 0;
     rt->globalDebugHooks.interruptHandlerData = 0;
+#ifdef JS_TRACER
+    JITInhibitingHookChange(rt, wasInhibited);
+    JS_UNLOCK_GC(rt);
+#endif
     return JS_TRUE;
 }
 
@@ -730,6 +774,9 @@ JS_PUBLIC_API(JSBool)
 JS_SetWatchPoint(JSContext *cx, JSObject *obj, jsval idval,
                  JSWatchPointHandler handler, void *closure)
 {
+    JSObject *origobj;
+    jsval v;
+    uintN attrs;
     jsid propid;
     JSObject *pobj;
     JSProperty *prop;
@@ -739,11 +786,11 @@ JS_SetWatchPoint(JSContext *cx, JSObject *obj, jsval idval,
     JSWatchPoint *wp;
     JSPropertyOp watcher;
 
-    if (!OBJ_IS_NATIVE(obj)) {
-        JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_CANT_WATCH,
-                             OBJ_GET_CLASS(cx, obj)->name);
+    origobj = obj;
+    obj = js_GetWrappedObject(cx, obj);
+    OBJ_TO_INNER_OBJECT(cx, obj);
+    if (!obj)
         return JS_FALSE;
-    }
 
     if (JSVAL_IS_INT(idval)) {
         propid = INT_JSVAL_TO_JSID(idval);
@@ -751,6 +798,19 @@ JS_SetWatchPoint(JSContext *cx, JSObject *obj, jsval idval,
         if (!js_ValueToStringId(cx, idval, &propid))
             return JS_FALSE;
         propid = js_CheckForStringIndex(propid);
+    }
+
+    /*
+     * If, by unwrapping and innerizing, we changed the object, check
+     * again to make sure that we're allowed to set a watch point.
+     */
+    if (origobj != obj && !obj->checkAccess(cx, propid, JSACC_WATCH, &v, &attrs))
+        return JS_FALSE;
+
+    if (!OBJ_IS_NATIVE(obj)) {
+        JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_CANT_WATCH,
+                             OBJ_GET_CLASS(cx, obj)->name);
+        return JS_FALSE;
     }
 
     if (!js_LookupProperty(cx, obj, propid, &pobj, &prop))
@@ -1140,7 +1200,7 @@ JS_GetFrameThis(JSContext *cx, JSStackFrame *fp)
         afp = NULL;
     }
 
-    if (!fp->thisp && fp->argv)
+    if (fp->argv)
         fp->thisp = js_ComputeThis(cx, JS_TRUE, fp->argv);
 
     if (afp) {
@@ -1537,16 +1597,36 @@ JS_SetExecuteHook(JSRuntime *rt, JSInterpreterHook hook, void *closure)
 JS_PUBLIC_API(JSBool)
 JS_SetCallHook(JSRuntime *rt, JSInterpreterHook hook, void *closure)
 {
+#ifdef JS_TRACER
+    JS_LOCK_GC(rt);
+    bool wasInhibited = rt->debuggerInhibitsJIT();
+#endif
     rt->globalDebugHooks.callHook = hook;
     rt->globalDebugHooks.callHookData = closure;
+#ifdef JS_TRACER
+    JITInhibitingHookChange(rt, wasInhibited);
+    JS_UNLOCK_GC(rt);
+    if (hook)
+        LeaveTraceRT(rt);
+#endif
     return JS_TRUE;
 }
 
 JS_PUBLIC_API(JSBool)
 JS_SetObjectHook(JSRuntime *rt, JSObjectHook hook, void *closure)
 {
+#ifdef JS_TRACER
+    JS_LOCK_GC(rt);
+    bool wasInhibited = rt->debuggerInhibitsJIT();
+#endif
     rt->globalDebugHooks.objectHook = hook;
     rt->globalDebugHooks.objectHookData = closure;
+#ifdef JS_TRACER
+    JITInhibitingHookChange(rt, wasInhibited);
+    JS_UNLOCK_GC(rt);
+    if (hook)
+        LeaveTraceRT(rt);
+#endif
     return JS_TRUE;
 }
 
@@ -1731,20 +1811,28 @@ JS_NewSystemObject(JSContext *cx, JSClass *clasp, JSObject *proto,
 
 /************************************************************************/
 
-JS_PUBLIC_API(JSDebugHooks *)
+JS_PUBLIC_API(const JSDebugHooks *)
 JS_GetGlobalDebugHooks(JSRuntime *rt)
 {
     return &rt->globalDebugHooks;
 }
 
 JS_PUBLIC_API(JSDebugHooks *)
-JS_SetContextDebugHooks(JSContext *cx, JSDebugHooks *hooks)
+JS_SetContextDebugHooks(JSContext *cx, const JSDebugHooks *hooks)
 {
-    JSDebugHooks *old;
-
     JS_ASSERT(hooks);
-    old = cx->debugHooks;
+    if (hooks != &cx->runtime->globalDebugHooks)
+        js_LeaveTrace(cx);
+
+#ifdef JS_TRACER
+    JS_LOCK_GC(cx->runtime);
+#endif
+    JSDebugHooks *old = const_cast<JSDebugHooks *>(cx->debugHooks);
     cx->debugHooks = hooks;
+#ifdef JS_TRACER
+    cx->updateJITEnabled();
+    JS_UNLOCK_GC(cx->runtime);
+#endif
     return old;
 }
 

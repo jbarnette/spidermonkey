@@ -1120,7 +1120,7 @@ ProcessArgs(JSContext *cx, JSObject *obj, char **argv, int argc)
 
 class FullTrustSecMan
 #ifndef XPCONNECT_STANDALONE
-  : public nsIScriptSecurityManager
+  : public nsIScriptSecurityManager_1_9_2
 #else
   : public nsIXPCSecurityManager
 #endif
@@ -1128,6 +1128,7 @@ class FullTrustSecMan
 public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIXPCSECURITYMANAGER
+  NS_DECL_NSISCRIPTSECURITYMANAGER_1_9_2
 #ifndef XPCONNECT_STANDALONE
   NS_DECL_NSISCRIPTSECURITYMANAGER
 #endif
@@ -1149,6 +1150,7 @@ NS_INTERFACE_MAP_BEGIN(FullTrustSecMan)
   NS_INTERFACE_MAP_ENTRY(nsIXPCSecurityManager)
 #ifndef XPCONNECT_STANDALONE
   NS_INTERFACE_MAP_ENTRY(nsIScriptSecurityManager)
+  NS_INTERFACE_MAP_ENTRY(nsIScriptSecurityManager_1_9_2)
 #endif
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIXPCSecurityManager)
 NS_INTERFACE_MAP_END
@@ -1279,6 +1281,20 @@ FullTrustSecMan::GetSubjectPrincipal(nsIPrincipal **_retval)
 {
     NS_IF_ADDREF(*_retval = mSystemPrincipal);
     return *_retval ? NS_OK : NS_ERROR_FAILURE;
+}
+
+/* [noscript] void pushContextPrincipal (in JSContextPtr cx, in JSStackFramePtr fp, in nsIPrincipal principal); */
+NS_IMETHODIMP
+FullTrustSecMan::PushContextPrincipal(JSContext * cx, JSStackFrame * fp, nsIPrincipal *principal)
+{
+    return NS_OK;
+}
+
+/* [noscript] void popContextPrincipal (in JSContextPtr cx); */
+NS_IMETHODIMP
+FullTrustSecMan::PopContextPrincipal(JSContext * cx)
+{
+    return NS_OK;
 }
 
 /* [noscript] nsIPrincipal getSystemPrincipal (); */

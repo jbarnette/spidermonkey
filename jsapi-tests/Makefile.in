@@ -51,8 +51,11 @@ CPPSRCS = \
   testPropCache.cpp \
   testXDR.cpp \
   testIntString.cpp \
+  testIsAboutToBeFinalized.cpp \
   testSameValue.cpp \
+  testDebugger.cpp \
   testDefineGetterSetterNonEnumerable.cpp \
+  testExtendedEq.cpp \
   $(NULL)
 
 DEFINES         += -DEXPORT_JS_API

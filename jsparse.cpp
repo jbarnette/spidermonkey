@@ -1571,7 +1571,7 @@ struct BindData {
 
 static JSBool
 BindLocalVariable(JSContext *cx, JSFunction *fun, JSAtom *atom,
-                  JSLocalKind localKind)
+                  JSLocalKind localKind, bool isArg)
 {
     JS_ASSERT(localKind == JSLOCAL_VAR || localKind == JSLOCAL_CONST);
 
@@ -1580,8 +1580,11 @@ BindLocalVariable(JSContext *cx, JSFunction *fun, JSAtom *atom,
      * Instead 'var arguments' always restates the predefined property of the
      * activation objects whose name is 'arguments'. Assignment to such a
      * variable must be handled specially.
+     *
+     * Special case: an argument named 'arguments' *does* shadow the predefined
+     * arguments property.
      */
-    if (atom == cx->runtime->atomState.argumentsAtom)
+    if (atom == cx->runtime->atomState.argumentsAtom && !isArg)
         return JS_TRUE;
 
     return js_AddLocal(cx, fun, atom, localKind);
@@ -1599,7 +1602,6 @@ static JSBool
 BindDestructuringArg(JSContext *cx, BindData *data, JSAtom *atom,
                      JSTreeContext *tc)
 {
-    JSAtomListElement *ale;
     JSParseNode *pn;
 
     /* Flag tc so we don't have to lookup arguments on every use. */
@@ -1607,10 +1609,6 @@ BindDestructuringArg(JSContext *cx, BindData *data, JSAtom *atom,
         tc->flags |= TCF_FUN_PARAM_ARGUMENTS;
 
     JS_ASSERT(tc->flags & TCF_IN_FUNCTION);
-    ale = tc->decls.lookup(atom);
-    pn = data->pn;
-    if (!ale && !Define(pn, atom, tc))
-        return JS_FALSE;
 
     JSLocalKind localKind = js_LookupLocal(cx, tc->fun, atom, NULL);
     if (localKind != JSLOCAL_NONE) {
@@ -1618,9 +1616,14 @@ BindDestructuringArg(JSContext *cx, BindData *data, JSAtom *atom,
                                     JSREPORT_ERROR, JSMSG_DESTRUCT_DUP_ARG);
         return JS_FALSE;
     }
+    JS_ASSERT(!tc->decls.lookup(atom));
+
+    pn = data->pn;
+    if (!Define(pn, atom, tc))
+        return JS_FALSE;
 
     uintN index = tc->fun->u.i.nvars;
-    if (!BindLocalVariable(cx, tc->fun, atom, JSLOCAL_VAR))
+    if (!BindLocalVariable(cx, tc->fun, atom, JSLOCAL_VAR, true))
         return JS_FALSE;
     pn->pn_op = JSOP_SETLOCAL;
     pn->pn_cookie = MAKE_UPVAR_COOKIE(tc->staticLevel, index);
@@ -2454,7 +2457,8 @@ FunctionDef(JSContext *cx, JSTokenStream *ts, JSTreeContext *tc,
     JSAtomListElement *ale;
 #if JS_HAS_DESTRUCTURING
     JSParseNode *item, *list = NULL;
-    bool destructuringArg = false, duplicatedArg = false;
+    bool destructuringArg = false;
+    JSAtom *duplicatedArg = NULL;
 #endif
 
     /* Make a TOK_FUNCTION node. */
@@ -2683,23 +2687,24 @@ FunctionDef(JSContext *cx, JSTokenStream *ts, JSTreeContext *tc,
 
               case TOK_NAME:
               {
-                /*
-                 * Check for a duplicate parameter name, a "feature" that
-                 * ECMA-262 requires. This is a SpiderMonkey strict warning,
-                 * soon to be an ES3.1 strict error.
-                 *
-                 * Further, if any argument is a destructuring pattern, forbid
-                 * duplicates. We will report the error either now if we have
-                 * seen a destructuring pattern already, or later when we find
-                 * the first pattern.
-                 */
                 JSAtom *atom = CURRENT_TOKEN(ts).t_atom;
-                if (JS_HAS_STRICT_OPTION(cx) &&
-                    js_LookupLocal(cx, fun, atom, NULL) != JSLOCAL_NONE) {
+                if (!DefineArg(pn, atom, fun->nargs, &funtc))
+                    return NULL;
 #if JS_HAS_DESTRUCTURING
+                /* 
+                 * ECMA-262 requires us to support duplicate parameter names, but if the
+                 * parameter list includes destructuring, we consider the code to have
+                 * opted in to higher standards, and forbid duplicates. We may see a
+                 * destructuring parameter later, so always note duplicates now.
+                 *
+                 * Duplicates are warned about (strict option) or cause errors (strict
+                 * mode code), but we do those tests in one place below, after having
+                 * parsed the body.
+                 */
+                if (js_LookupLocal(cx, fun, atom, NULL) != JSLOCAL_NONE) {
+                    duplicatedArg = atom;
                     if (destructuringArg)
                         goto report_dup_and_destructuring;
-                    duplicatedArg = true;
 #endif
                     const char *name = js_AtomToPrintableString(cx, atom);
                     if (!name ||
@@ -2712,8 +2717,6 @@ FunctionDef(JSContext *cx, JSTokenStream *ts, JSTreeContext *tc,
                         return NULL;
                     }
                 }
-                if (!DefineArg(pn, atom, fun->nargs, &funtc))
-                    return NULL;
                 if (!js_AddLocal(cx, fun, atom, JSLOCAL_ARG))
                     return NULL;
                 break;
@@ -2728,7 +2731,8 @@ FunctionDef(JSContext *cx, JSTokenStream *ts, JSTreeContext *tc,
 
 #if JS_HAS_DESTRUCTURING
               report_dup_and_destructuring:
-                js_ReportCompileErrorNumber(cx, TS(tc->compiler), NULL,
+                JSDefinition *dn = ALE_DEFN(funtc.decls.lookup(duplicatedArg));
+                js_ReportCompileErrorNumber(cx, TS(tc->compiler), dn,
                                             JSREPORT_ERROR,
                                             JSMSG_DESTRUCT_DUP_ARG);
                 return NULL;
@@ -3321,7 +3325,7 @@ BindVarOrConst(JSContext *cx, BindData *data, JSAtom *atom, JSTreeContext *tc)
         localKind = (data->op == JSOP_DEFCONST) ? JSLOCAL_CONST : JSLOCAL_VAR;
 
         uintN index = tc->fun->u.i.nvars;
-        if (!BindLocalVariable(cx, tc->fun, atom, localKind))
+        if (!BindLocalVariable(cx, tc->fun, atom, localKind, false))
             return JS_FALSE;
         pn->pn_op = JSOP_GETLOCAL;
         pn->pn_cookie = MAKE_UPVAR_COOKIE(tc->staticLevel, index);
@@ -6597,8 +6601,7 @@ ComprehensionTail(JSParseNode *kid, uintN blockid, JSTreeContext *tc,
     pn2->pn_kid = kid;
     *pnp = pn2;
 
-    if (type == TOK_ARRAYPUSH)
-        PopStatement(tc);
+    PopStatement(tc);
     return pn;
 }
 
@@ -8729,8 +8732,20 @@ js_FoldConstants(JSContext *cx, JSParseNode *pn, JSTreeContext *tc, bool inCond)
         break;
 
       case PN_UNARY:
-        /* Our kid may be null (e.g. return; vs. return e;). */
         pn1 = pn->pn_kid;
+
+        /*
+         * Kludge to deal with typeof expressions: because constant folding
+         * can turn an expression into a name node, we have to check here,
+         * before folding, to see if we should throw undefined name errors.
+         *
+         * NB: We know that if pn->pn_op is JSOP_TYPEOF, pn1 will not be
+         * null. This assumption does not hold true for other unary
+         * expressions.
+         */
+        if (pn->pn_op == JSOP_TYPEOF && pn1->pn_type != TOK_NAME)
+            pn->pn_op = JSOP_TYPEOFEXPR;
+
         if (pn1 && !js_FoldConstants(cx, pn1, tc, pn->pn_op == JSOP_NOT))
             return JS_FALSE;
         break;

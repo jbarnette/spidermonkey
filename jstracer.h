@@ -50,6 +50,7 @@
 #include "jsinterp.h"
 #include "jslock.h"
 #include "jsnum.h"
+#include "jsvector.h"
 
 #if defined(DEBUG) && !defined(JS_JIT_SPEW)
 #define JS_JIT_SPEW
@@ -735,7 +736,9 @@ class TraceRecorder {
     uint32                  outerArgc; /* outer trace deepest frame argc */
     bool                    loop;
     nanojit::LIns*          loopLabel;
+    js::Vector<JSTraceType, 256> tempTypeMap;
 
+    nanojit::LIns* insImmVal(jsval val);
     nanojit::LIns* insImmObj(JSObject* obj);
     nanojit::LIns* insImmFun(JSFunction* fun);
     nanojit::LIns* insImmStr(JSString* str);
@@ -947,6 +950,7 @@ class TraceRecorder {
     JS_REQUIRES_STACK JSRecordingStatus guardCallee(jsval& callee);
     JS_REQUIRES_STACK JSStackFrame      *guardArguments(JSObject *obj, nanojit::LIns* obj_ins,
                                                         unsigned *depthp);
+    JS_REQUIRES_STACK nanojit::LIns* guardArgsLengthNotAssigned(nanojit::LIns* argsobj_ins);
     JS_REQUIRES_STACK JSRecordingStatus getClassPrototype(JSObject* ctor,
                                                           nanojit::LIns*& proto_ins);
     JS_REQUIRES_STACK JSRecordingStatus getClassPrototype(JSProtoKey key,
@@ -1073,6 +1077,7 @@ public:
 
     friend class ImportBoxedStackSlotVisitor;
     friend class ImportUnboxedStackSlotVisitor;
+    friend class ImportUnboxedFrameSlotVisitor;
     friend class ImportGlobalSlotVisitor;
     friend class AdjustCallerGlobalTypesVisitor;
     friend class AdjustCallerStackTypesVisitor;
@@ -1082,7 +1087,8 @@ public:
     friend jsval *js_ConcatPostImacroStackCleanup(uint32 argc, JSFrameRegs &regs,
                                                   TraceRecorder *recorder);
 };
-#define TRACING_ENABLED(cx)       JS_HAS_OPTION(cx, JSOPTION_JIT)
+
+#define TRACING_ENABLED(cx)       ((cx)->jitEnabled)
 #define TRACE_RECORDER(cx)        (JS_TRACE_MONITOR(cx).recorder)
 #define SET_TRACE_RECORDER(cx,tr) (JS_TRACE_MONITOR(cx).recorder = (tr))
 
@@ -1135,7 +1141,7 @@ extern bool
 js_OverfullJITCache(JSTraceMonitor* tm);
 
 extern void
-js_ResetJIT(JSContext* cx);
+js_FlushJITCache(JSContext* cx);
 
 extern void
 js_PurgeJITOracle();

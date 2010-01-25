@@ -67,7 +67,7 @@ PRUint32     nsXPConnect::gReportAllJSExceptions = 0;
 
 // Global cache of the default script security manager (QI'd to
 // nsIScriptSecurityManager)
-nsIScriptSecurityManager *gScriptSecurityManager = nsnull;
+nsIScriptSecurityManager_1_9_2 *gScriptSecurityManager = nsnull;
 
 const char XPC_CONTEXT_STACK_CONTRACTID[] = "@mozilla.org/js/xpc/ContextStack;1";
 const char XPC_RUNTIME_CONTRACTID[]       = "@mozilla.org/js/xpc/RuntimeService;1";
@@ -1063,16 +1063,14 @@ nsXPConnect::InitClasses(JSContext * aJSContext, JSObject * aGlobalJSObj)
     if(!nsXPCComponents::AttachNewComponentsObject(ccx, scope, aGlobalJSObj))
         return UnexpectedFailure(NS_ERROR_FAILURE);
 
-#ifdef XPC_IDISPATCH_SUPPORT
-    // Initialize any properties IDispatch needs on the global object
-    XPCIDispatchExtension::Initialize(ccx, aGlobalJSObj);
-#endif
+    if(XPCPerThreadData::IsMainThread(ccx))
+    {
+        if (!XPCNativeWrapper::AttachNewConstructorObject(ccx, aGlobalJSObj))
+            return UnexpectedFailure(NS_ERROR_FAILURE);
 
-    if (!XPCNativeWrapper::AttachNewConstructorObject(ccx, aGlobalJSObj))
-        return UnexpectedFailure(NS_ERROR_FAILURE);
-
-    if (!XPC_SJOW_AttachNewConstructorObject(ccx, aGlobalJSObj))
-        return UnexpectedFailure(NS_ERROR_FAILURE);
+        if (!XPC_SJOW_AttachNewConstructorObject(ccx, aGlobalJSObj))
+            return UnexpectedFailure(NS_ERROR_FAILURE);
+    }
 
     return NS_OK;
 }
@@ -1185,11 +1183,14 @@ nsXPConnect::InitClassesWithNewWrappedGlobal(JSContext * aJSContext,
         if(!nsXPCComponents::AttachNewComponentsObject(ccx, scope, globalJSObj))
             return UnexpectedFailure(NS_ERROR_FAILURE);
 
-        if(!XPCNativeWrapper::AttachNewConstructorObject(ccx, globalJSObj))
-            return UnexpectedFailure(NS_ERROR_FAILURE);
+        if(XPCPerThreadData::IsMainThread(ccx))
+        {
+            if(!XPCNativeWrapper::AttachNewConstructorObject(ccx, globalJSObj))
+                return UnexpectedFailure(NS_ERROR_FAILURE);
 
-        if(!XPC_SJOW_AttachNewConstructorObject(ccx, globalJSObj))
-            return UnexpectedFailure(NS_ERROR_FAILURE);
+            if(!XPC_SJOW_AttachNewConstructorObject(ccx, globalJSObj))
+                return UnexpectedFailure(NS_ERROR_FAILURE);
+        }
     }
 
     NS_ADDREF(*_retval = holder);
@@ -1625,7 +1626,7 @@ nsXPConnect::SetDefaultSecurityManager(nsIXPCSecurityManager *aManager,
     mDefaultSecurityManager = aManager;
     mDefaultSecurityManagerFlags = flags;
 
-    nsCOMPtr<nsIScriptSecurityManager> ssm =
+    nsCOMPtr<nsIScriptSecurityManager_1_9_2> ssm =
         do_QueryInterface(mDefaultSecurityManager);
 
     // Remember the result of the above QI for fast access to the

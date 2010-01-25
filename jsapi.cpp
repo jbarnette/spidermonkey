@@ -1169,18 +1169,24 @@ JS_GetOptions(JSContext *cx)
 JS_PUBLIC_API(uint32)
 JS_SetOptions(JSContext *cx, uint32 options)
 {
+    JS_LOCK_GC(cx->runtime);
     uint32 oldopts = cx->options;
     cx->options = options;
     js_SyncOptionsToVersion(cx);
+    cx->updateJITEnabled();
+    JS_UNLOCK_GC(cx->runtime);
     return oldopts;
 }
 
 JS_PUBLIC_API(uint32)
 JS_ToggleOptions(JSContext *cx, uint32 options)
 {
+    JS_LOCK_GC(cx->runtime);
     uint32 oldopts = cx->options;
     cx->options ^= options;
     js_SyncOptionsToVersion(cx);
+    cx->updateJITEnabled();
+    JS_UNLOCK_GC(cx->runtime);
     return oldopts;
 }
 
@@ -1200,6 +1206,7 @@ JS_GetGlobalObject(JSContext *cx)
 JS_PUBLIC_API(void)
 JS_SetGlobalObject(JSContext *cx, JSObject *obj)
 {
+    CHECK_REQUEST(cx);
     cx->globalObject = obj;
 
 #if JS_HAS_XML_SUPPORT
@@ -2588,6 +2595,14 @@ JS_GetGCParameterForThread(JSContext *cx, JSGCParamKey key)
 #endif
 }
 
+JS_PUBLIC_API(void)
+JS_FlushCaches(JSContext *cx)
+{
+#ifdef JS_TRACER
+    js_FlushJITCache(cx);
+#endif
+}
+
 JS_PUBLIC_API(intN)
 JS_AddExternalStringFinalizer(JSStringFinalizeOp finalizer)
 {
@@ -3772,7 +3787,7 @@ JS_NewArrayObject(JSContext *cx, jsint length, jsval *vector)
 JS_PUBLIC_API(JSBool)
 JS_IsArrayObject(JSContext *cx, JSObject *obj)
 {
-    return OBJ_IS_ARRAY(cx, obj);
+    return OBJ_IS_ARRAY(cx, js_GetWrappedObject(cx, obj));
 }
 
 JS_PUBLIC_API(JSBool)
@@ -4954,7 +4969,6 @@ JS_ExecuteScriptPart(JSContext *cx, JSObject *obj, JSScript *script,
                      JSExecPart part, jsval *rval)
 {
     JSScript tmp;
-    JSDebugHooks *hooks;
     JSBool ok;
 
     /* Make a temporary copy of the JSScript structure and farble it a bit. */
@@ -4967,7 +4981,7 @@ JS_ExecuteScriptPart(JSContext *cx, JSObject *obj, JSScript *script,
     }
 
     /* Tell the debugger about our temporary copy of the script structure. */
-    hooks = cx->debugHooks;
+    const JSDebugHooks *hooks = cx->debugHooks;
     if (hooks->newScriptHook) {
         hooks->newScriptHook(cx, tmp.filename, tmp.lineno, &tmp, NULL,
                              hooks->newScriptHookData);

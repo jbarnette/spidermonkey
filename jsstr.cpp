@@ -48,6 +48,8 @@
  * of rooting things that might lose their newborn root due to subsequent GC
  * allocations in the same native method.
  */
+#define __STDC_LIMIT_MACROS
+
 #include <stdlib.h>
 #include <string.h>
 #include "jstypes.h"
@@ -296,6 +298,8 @@ str_encodeURI(JSContext *cx, uintN argc, jsval *vp);
 
 static JSBool
 str_encodeURI_Component(JSContext *cx, uintN argc, jsval *vp);
+
+static const uint32 OVERLONG_UTF8 = UINT32_MAX;
 
 static uint32
 Utf8ToOneUcs4Char(const uint8 *utf8Buffer, int utf8Length);
@@ -1081,8 +1085,27 @@ StringMatch(const jschar *text, jsuint textlen,
     if (textlen < patlen)
         return -1;
 
-    /* XXX tune the BMH threshold (512) */
-    if (textlen >= 512 && patlen <= sBMHPatLenMax) {
+#if __i386__
+    /*
+     * Given enough registers, the unrolled loop below is faster than the
+     * following loop. 32-bit x86 does not have enough registers.
+     */
+    if (patlen == 1) {
+        const jschar p0 = *pat;
+        for (const jschar *c = text, *end = text + textlen; c != end; ++c) {
+            if (*c == p0)
+                return c - text;
+        }
+        return -1;
+    }
+#endif
+
+    /*
+     * XXX tune the BMH threshold (512) and pattern-length threshold (2).
+     * If the text or pattern strings are short, BMH will be more expensive
+     * than the basic linear scan.
+     */
+    if (textlen >= 512 && jsuint(patlen - 2) <= sBMHPatLenMax - 2) {
         jsint index = js_BoyerMooreHorspool(text, textlen, pat, patlen);
         if (index != sBMHBadPattern)
             return index;
@@ -1091,8 +1114,18 @@ StringMatch(const jschar *text, jsuint textlen,
     const jschar *textend = text + textlen - (patlen - 1);
     const jschar *patend = pat + patlen;
     const jschar p0 = *pat;
-    const jschar *t = text;
+    const jschar *patNext = pat + 1;
     uint8 fixup;
+
+#if __APPLE__ && __GNUC__ && __i386__
+    /*
+     * It is critical that |t| is kept in a register. The version of gcc we use
+     * to build on 32-bit Mac does not realize this. See bug 526173.
+     */
+    register const jschar *t asm("esi") = text;
+#else
+    const jschar *t = text;
+#endif
 
     /* Credit: Duff */
     switch ((textend - text) & 7) {
@@ -1109,7 +1142,7 @@ StringMatch(const jschar *text, jsuint textlen,
             do {
                 if (*t++ == p0) {
                   match:
-                    for (const jschar *p1 = pat + 1, *t1 = t;
+                    for (const jschar *p1 = patNext, *t1 = t;
                          p1 != patend;
                          ++p1, ++t1) {
                         if (*p1 != *t1)
@@ -1234,18 +1267,26 @@ str_lastIndexOf(JSContext *cx, uintN argc, jsval *vp)
         return JS_TRUE;
     }
 
-    j = 0;
-    while (i >= 0) {
-        /* This is always safe because i <= textlen - patlen and j < patlen */
-        if (text[i + j] == pat[j]) {
-            if (++j == patlen)
-                break;
-        } else {
-            i--;
-            j = 0;
+    const jschar *t = text + i;
+    const jschar *textend = text - 1;
+    const jschar p0 = *pat;
+    const jschar *patNext = pat + 1;
+    const jschar *patEnd = pat + patlen;
+
+    for (; t != textend; --t) {
+        if (*t == p0) {
+            const jschar *t1 = t + 1;
+            for (const jschar *p1 = patNext; p1 != patEnd; ++p1, ++t1) {
+                if (*t1 != *p1)
+                    goto break_continue;
+            }
+            *vp = INT_TO_JSVAL(t - text);
+            return JS_TRUE;
         }
+      break_continue:;
     }
-    *vp = INT_TO_JSVAL(i);
+
+    *vp = INT_TO_JSVAL(-1);
     return JS_TRUE;
 }
 
@@ -2854,7 +2895,7 @@ JSObject* FASTCALL
 js_String_tn(JSContext* cx, JSObject* proto, JSString* str)
 {
     JS_ASSERT(JS_ON_TRACE(cx));
-    return js_NewNativeObject(cx, &js_StringClass, proto, STRING_TO_JSVAL(str));
+    return js_NewObjectWithClassProto(cx, &js_StringClass, proto, STRING_TO_JSVAL(str));
 }
 JS_DEFINE_CALLINFO_3(extern, OBJECT, js_String_tn, CONTEXT, CALLEE_PROTOTYPE, STRING, 0, 0)
 
@@ -3643,7 +3684,7 @@ js_InflateStringToBuffer(JSContext *cx, const char *src, size_t srclen,
                 n++;
             if (n > srclen)
                 goto bufferTooSmall;
-            if (n == 1 || n > 6)
+            if (n == 1 || n > 4)
                 goto badCharacter;
             for (j = 1; j < n; j++) {
                 if ((src[j] & 0xC0) != 0x80)
@@ -5162,7 +5203,7 @@ Encode(JSContext *cx, JSString *str, const jschar *unescapedSet,
     const jschar *chars;
     jschar c, c2;
     uint32 v;
-    uint8 utf8buf[6];
+    uint8 utf8buf[4];
     jschar hexBuf[4];
     static const char HexDigits[] = "0123456789ABCDEF"; /* NB: uppercase */
 
@@ -5226,7 +5267,7 @@ Decode(JSContext *cx, JSString *str, const jschar *reservedSet, jsval *rval)
     jschar c, H;
     uint32 v;
     jsuint B;
-    uint8 octets[6];
+    uint8 octets[4];
     intN j, n;
 
     str->getCharsAndLength(chars, length);
@@ -5252,7 +5293,7 @@ Decode(JSContext *cx, JSString *str, const jschar *reservedSet, jsval *rval)
                 n = 1;
                 while (B & (0x80 >> n))
                     n++;
-                if (n == 1 || n > 6)
+                if (n == 1 || n > 4)
                     goto report_bad_uri;
                 octets[0] = (uint8)B;
                 if (k + 3 * (n - 1) >= length)
@@ -5351,14 +5392,14 @@ str_encodeURI_Component(JSContext *cx, uintN argc, jsval *vp)
 
 /*
  * Convert one UCS-4 char and write it into a UTF-8 buffer, which must be at
- * least 6 bytes long.  Return the number of UTF-8 bytes of data written.
+ * least 4 bytes long.  Return the number of UTF-8 bytes of data written.
  */
 int
 js_OneUcs4ToUtf8Char(uint8 *utf8Buffer, uint32 ucs4Char)
 {
     int utf8Length = 1;
 
-    JS_ASSERT(ucs4Char <= 0x7FFFFFFF);
+    JS_ASSERT(ucs4Char <= 0x10FFFF);
     if (ucs4Char < 0x80) {
         *utf8Buffer = (uint8)ucs4Char;
     } else {
@@ -5391,10 +5432,10 @@ Utf8ToOneUcs4Char(const uint8 *utf8Buffer, int utf8Length)
     uint32 minucs4Char;
     /* from Unicode 3.1, non-shortest form is illegal */
     static const uint32 minucs4Table[] = {
-        0x00000080, 0x00000800, 0x0001000, 0x0020000, 0x0400000
+        0x00000080, 0x00000800, 0x00010000
     };
 
-    JS_ASSERT(utf8Length >= 1 && utf8Length <= 6);
+    JS_ASSERT(utf8Length >= 1 && utf8Length <= 4);
     if (utf8Length == 1) {
         ucs4Char = *utf8Buffer;
         JS_ASSERT(!(ucs4Char & 0x80));
@@ -5407,8 +5448,9 @@ Utf8ToOneUcs4Char(const uint8 *utf8Buffer, int utf8Length)
             JS_ASSERT((*utf8Buffer & 0xC0) == 0x80);
             ucs4Char = ucs4Char<<6 | (*utf8Buffer++ & 0x3F);
         }
-        if (ucs4Char < minucs4Char ||
-            ucs4Char == 0xFFFE || ucs4Char == 0xFFFF) {
+        if (JS_UNLIKELY(ucs4Char < minucs4Char)) {
+            ucs4Char = OVERLONG_UTF8;
+        } else if (ucs4Char == 0xFFFE || ucs4Char == 0xFFFF) {
             ucs4Char = 0xFFFD;
         }
     }

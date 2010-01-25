@@ -630,7 +630,7 @@ num_toPrecision(JSContext *cx, uintN argc, jsval *vp)
 #ifdef JS_TRACER
 
 JS_DEFINE_TRCINFO_1(num_toString,
-    (2, (extern, STRING, js_NumberToString,      CONTEXT, THIS_DOUBLE,        1, 1)))
+    (2, (extern, STRING_RETRY, js_NumberToString,      CONTEXT, THIS_DOUBLE,        1, 1)))
 
 #endif /* JS_TRACER */
 
@@ -761,10 +761,6 @@ void
 js_FinishRuntimeNumberState(JSContext *cx)
 {
     JSRuntime *rt = cx->runtime;
-
-    js_UnlockGCThingRT(rt, rt->jsNaN);
-    js_UnlockGCThingRT(rt, rt->jsNegativeInfinity);
-    js_UnlockGCThingRT(rt, rt->jsPositiveInfinity);
 
     rt->jsNaN = NULL;
     rt->jsNegativeInfinity = NULL;

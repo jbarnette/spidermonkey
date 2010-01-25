@@ -195,8 +195,8 @@ public:
   /**
    * Returns the script security manager used by XPConnect.
    */
-  static nsIScriptSecurityManager *GetSecurityManager() {
-    extern nsIScriptSecurityManager *gScriptSecurityManager;
+  static nsIScriptSecurityManager_1_9_2 *GetSecurityManager() {
+    extern nsIScriptSecurityManager_1_9_2 *gScriptSecurityManager;
 
     return gScriptSecurityManager;
   }

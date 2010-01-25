@@ -313,6 +313,7 @@ js_PutArguments(JSContext *cx, JSObject *argsobj, jsval *args)
 {
     JS_ASSERT(js_GetArgsPrivateNative(argsobj));
     PutArguments(cx, argsobj, args);
+    argsobj->setPrivate(NULL);
     return true;
 }
 
@@ -519,7 +520,7 @@ ArgGetter(JSContext *cx, JSObject *obj, jsval idval, jsval *vp)
 #ifdef JS_TRACER
             js_ArgsPrivateNative *argp = js_GetArgsPrivateNative(obj);
             if (argp) {
-                if (js_NativeToValue(cx, *vp, (JSTraceType) 1, &argp->argv[arg]))
+                if (js_NativeToValue(cx, *vp, argp->typemap()[arg], &argp->argv[arg]))
                     return true;
                 js_LeaveTrace(cx);
                 return false;
@@ -564,17 +565,23 @@ ArgGetter(JSContext *cx, JSObject *obj, jsval idval, jsval *vp)
 static JSBool
 ArgSetter(JSContext *cx, JSObject *obj, jsval idval, jsval *vp)
 {
+#ifdef JS_TRACER
+    // To be able to set a property here on trace, we would have to make
+    // sure any updates also get written back to the trace native stack.
+    // For simplicity, we just leave trace, since this is presumably not
+    // a common operation.
+    if (JS_ON_TRACE(cx)) {
+        js_DeepBail(cx);
+        return false;
+    }
+#endif
+
     if (!JS_InstanceOf(cx, obj, &js_ArgumentsClass, NULL))
         return true;
 
     if (JSVAL_IS_INT(idval)) {
         uintN arg = uintN(JSVAL_TO_INT(idval));
         if (arg < GetArgsLength(obj)) {
-            if (js_GetArgsPrivateNative(obj)) {
-                js_LeaveTrace(cx);
-                return false;
-            }
-
             JSStackFrame *fp = (JSStackFrame *) obj->getPrivate();
             if (fp) {
                 fp->argv[arg] = *vp;
@@ -2705,7 +2712,7 @@ HashLocalName(JSContext *cx, JSLocalNameMap *map, JSAtom *name,
     }
     if (entry->name) {
         JS_ASSERT(entry->name == name);
-        JS_ASSERT(entry->localKind == JSLOCAL_ARG);
+        JS_ASSERT(entry->localKind == JSLOCAL_ARG && localKind == JSLOCAL_ARG);
         dup = (JSNameIndexPair *) cx->malloc(sizeof *dup);
         if (!dup)
             return JS_FALSE;
@@ -2929,7 +2936,7 @@ get_local_names_enumerator(JSDHashTable *table, JSDHashEntryHdr *hdr,
     return JS_DHASH_NEXT;
 }
 
-jsuword *
+JS_FRIEND_API(jsuword *)
 js_GetLocalNameArray(JSContext *cx, JSFunction *fun, JSArenaPool *pool)
 {
     uintN n;

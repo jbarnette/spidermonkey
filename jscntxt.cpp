@@ -116,7 +116,6 @@ PurgeThreadData(JSContext *cx, JSThreadData *data)
 
 # ifdef JS_TRACER
     JSTraceMonitor *tm = &data->traceMonitor;
-    tm->reservedDoublePoolPtr = tm->reservedDoublePool;
 
     /*
      * If we are about to regenerate shapes, we have to flush the JIT cache,
@@ -126,12 +125,14 @@ PurgeThreadData(JSContext *cx, JSThreadData *data)
         tm->needFlush = JS_TRUE;
 
     /*
-     * We want to keep tm->reservedObjects after the GC. So, unless we are
-     * shutting down, we don't purge them here and rather mark them during
+     * We want to keep reserved doubles and objects after the GC. So, unless we
+     * are shutting down, we don't purge them here and rather mark them during
      * the GC, see MarkReservedObjects in jsgc.cpp.
      */
-    if (cx->runtime->state == JSRTS_LANDING)
+    if (cx->runtime->state == JSRTS_LANDING) {
+        tm->reservedDoublePoolPtr = tm->reservedDoublePool;
         tm->reservedObjects = NULL;
+    }
 # endif
 
     /* Destroy eval'ed scripts. */
@@ -165,12 +166,10 @@ DestroyThread(JSThread *thread)
     js_free(thread);
 }
 
-JSBool
-js_InitContextThread(JSContext *cx)
+JSThread *
+js_CurrentThread(JSRuntime *rt)
 {
-    JS_ASSERT(!cx->thread);
     jsword id = js_CurrentThreadId();
-    JSRuntime *rt = cx->runtime;
     JS_LOCK_GC(rt);
 
     /*
@@ -190,7 +189,7 @@ js_InitContextThread(JSContext *cx)
         JS_UNLOCK_GC(rt);
         thread = NewThread(id);
         if (!thread)
-            return false;
+            return NULL;
         JS_LOCK_GC(rt);
         js_WaitForGC(rt);
         entry = (JSThreadsHashEntry *)
@@ -199,13 +198,23 @@ js_InitContextThread(JSContext *cx)
         if (!entry) {
             JS_UNLOCK_GC(rt);
             DestroyThread(thread);
-            return false;
+            return NULL;
         }
 
         /* Another thread cannot initialize entry->thread. */
         JS_ASSERT(!entry->thread);
         entry->thread = thread;
     }
+
+    return thread;
+}
+
+JSBool
+js_InitContextThread(JSContext *cx)
+{
+    JSThread *thread = js_CurrentThread(cx->runtime);
+    if (!thread)
+        return false;
 
     JS_APPEND_LINK(&cx->threadLinks, &thread->contextList);
     cx->thread = thread;
@@ -287,6 +296,20 @@ thread_tracer(JSDHashTable *table, JSDHashEntryHdr *hdr, uint32 /* index */,
 }
 
 #endif /* JS_THREADSAFE */
+
+JSThreadData *
+js_CurrentThreadData(JSRuntime *rt)
+{
+#ifdef JS_THREADSAFE
+    JSThread *thread = js_CurrentThread(rt);
+    if (!thread)
+        return NULL;
+
+    return &thread->data;
+#else
+    return &rt->threadData;
+#endif
+}
 
 JSBool
 js_InitThreads(JSRuntime *rt)
@@ -719,21 +742,9 @@ js_DestroyContext(JSContext *cx, JSDestroyContextMode mode)
 #endif
 
         if (last) {
-            /* Clear builtin functions, which are recreated on demand. */
-            memset(rt->builtinFunctions, 0, sizeof rt->builtinFunctions);
-
             js_GC(cx, GC_LAST_CONTEXT);
             DUMP_EVAL_CACHE_METER(cx);
             DUMP_FUNCTION_METER(cx);
-
-            /*
-             * Free the script filename table if it exists and is empty. Do this
-             * after the last GC to avoid finalizers tripping on free memory.
-             */
-            if (rt->scriptFilenameTable &&
-                rt->scriptFilenameTable->nentries == 0) {
-                js_FinishRuntimeScriptState(rt);
-            }
 
             /* Take the runtime down, now that it has no contexts or atoms. */
             JS_LOCK_GC(rt);

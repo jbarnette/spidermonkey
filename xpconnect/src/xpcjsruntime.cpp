@@ -64,11 +64,6 @@ const char* XPCJSRuntime::mStrings[] = {
     "__iterator__",         // IDX_ITERATOR
     "__parent__",           // IDX_PARENT
     "__exposedProps__"      // IDX_EXPOSEDPROPS
-#ifdef XPC_IDISPATCH_SUPPORT
-    , "GeckoActiveXObject"  // IDX_ACTIVEX_OBJECT
-    , "COMObject"           // IDX_COMOBJECT
-    , "supports"            // IDX_ACTIVEX_SUPPORTS
-#endif
 };
 
 /***************************************************************************/
@@ -449,7 +444,8 @@ void XPCJSRuntime::UnrootContextGlobals()
     {
         NS_ASSERTION(!JS_HAS_OPTION(acx, JSOPTION_UNROOTED_GLOBAL),
                      "unrooted global should be set only during CC");
-        if(nsXPConnect::GetXPConnect()->GetRequestDepth(acx) == 0)
+        if(XPCPerThreadData::IsMainThread(acx) &&
+           nsXPConnect::GetXPConnect()->GetRequestDepth(acx) == 0)
         {
             JS_ClearNewbornRoots(acx);
             if(acx->globalObject)

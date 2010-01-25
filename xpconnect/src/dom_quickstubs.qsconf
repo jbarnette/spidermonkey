@@ -226,6 +226,7 @@ members = [
     'nsIDOMNSElement.clientHeight',
     'nsIDOMNSElement.clientWidth',
     'nsIDOMNSElement.clientTop',
+    'nsIDOMNSElement.mozMatchesSelector',
 
     # dom/public/idl/css
     'nsIDOMElementCSSInlineStyle.style',
@@ -513,6 +514,17 @@ nsIDOMNode_GetChildNodes_customMethodCallCode = """
         return xpc_qsThrowGetterSetterFailed(cx, NS_ERROR_OUT_OF_MEMORY, JSVAL_TO_OBJECT(*vp), id);
 """
 
+nsIDOMStorage_Clear_customMethodCallCode = """
+    nsresult rv = self->Clear();
+    if (NS_SUCCEEDED(rv))
+        JS_ClearScope(cx, obj);
+        
+#ifdef DEBUG
+    nsISupports* result = nsnull;
+    nsISupports* debug_result = nsnull;
+#endif
+"""
+
 customMethodCalls = {
     'nsIDOMNode_GetNextSibling': {
         'thisType': 'nsINode',
@@ -545,5 +557,8 @@ customMethodCalls = {
     'nsIDOMNodeList_Item': {
         'thisType': 'nsINodeList',
         'code': '    nsINode* result = self->GetNodeAt(arg0);'
+        },
+    'nsIDOMStorage_Clear': {
+        'code': nsIDOMStorage_Clear_customMethodCallCode
         }
     }
