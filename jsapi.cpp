@@ -655,10 +655,7 @@ JS_TypeOfValue(JSContext *cx, jsval v)
                  * type "object", not "function", for Web compatibility.
                  */
                 clasp = OBJ_GET_CLASS(cx, obj);
-/* see https://bugzilla.mozilla.org/show_bug.cgi?id=542858
                 if ((ops == &js_ObjectOps)
-*/
-                if ((ops == &js_ObjectOps || ops->call == js_ObjectOps.call)
                     ? (clasp->call
                        ? clasp == &js_ScriptClass
                        : clasp == &js_FunctionClass)
