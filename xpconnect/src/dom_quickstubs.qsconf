@@ -48,7 +48,7 @@ name = 'DOM'
 # doesn't crash--it may in fact return a plausible wrong answer.
 
 members = [ 
-    # dom/public/idl/base
+    # dom/interfaces/base
     #
     # Note that many implementations of interfaces in this directory
     # use GetCurrentNativeCallContext, notably:
@@ -85,51 +85,21 @@ members = [
     #'nsIDOMLocation.hostname',
     #'nsIDOMLocation.href',
 
-    # dom/public/idl/canvas
+    # dom/interfaces/canvas
     #
     # nsIDOMCanvasRenderingContext2D
+    'nsIDOMCanvasRenderingContext2D.*',
     # NOTE: attributes strokeStyle and fillStyle are nsIVariant
-    # NOTE: drawImage(), getImageData(), and putImageData() use
+    # NOTE: createImageDate(), getImageData(), and putImageData() use
     #       GetCurrentNativeCallContext
-    'nsIDOMCanvasRenderingContext2D.canvas',
-    'nsIDOMCanvasRenderingContext2D.save',
-    'nsIDOMCanvasRenderingContext2D.restore',
-    'nsIDOMCanvasRenderingContext2D.scale',
-    'nsIDOMCanvasRenderingContext2D.rotate',
-    'nsIDOMCanvasRenderingContext2D.translate',
-    'nsIDOMCanvasRenderingContext2D.transform',
-    'nsIDOMCanvasRenderingContext2D.setTransform',
-    'nsIDOMCanvasRenderingContext2D.globalAlpha',
-    'nsIDOMCanvasRenderingContext2D.globalCompositeOperation',
-    'nsIDOMCanvasRenderingContext2D.lineWidth',
-    'nsIDOMCanvasRenderingContext2D.lineCap',
-    'nsIDOMCanvasRenderingContext2D.lineJoin',
-    'nsIDOMCanvasRenderingContext2D.miterLimit',
-    'nsIDOMCanvasRenderingContext2D.clearRect',
-    'nsIDOMCanvasRenderingContext2D.fillRect',
-    'nsIDOMCanvasRenderingContext2D.strokeRect',
-    'nsIDOMCanvasRenderingContext2D.beginPath',
-    'nsIDOMCanvasRenderingContext2D.closePath',
-    'nsIDOMCanvasRenderingContext2D.moveTo',
-    'nsIDOMCanvasRenderingContext2D.lineTo',
-    'nsIDOMCanvasRenderingContext2D.quadraticCurveTo',
-    'nsIDOMCanvasRenderingContext2D.bezierCurveTo',
-    'nsIDOMCanvasRenderingContext2D.arcTo',
-    'nsIDOMCanvasRenderingContext2D.arc',
-    'nsIDOMCanvasRenderingContext2D.rect',
-    'nsIDOMCanvasRenderingContext2D.fill',
-    'nsIDOMCanvasRenderingContext2D.stroke',
-    'nsIDOMCanvasRenderingContext2D.clip',
-    'nsIDOMCanvasRenderingContext2D.font',
-    'nsIDOMCanvasRenderingContext2D.textAlign',
-    'nsIDOMCanvasRenderingContext2D.textBaseline',
-    'nsIDOMCanvasRenderingContext2D.fillText',
-    'nsIDOMCanvasRenderingContext2D.strokeText',
-    'nsIDOMCanvasRenderingContext2D.measureText',
-    'nsIDOMCanvasRenderingContext2D.isPointInPath',
-    'nsIDOMTextMetrics.width',
+    '-nsIDOMCanvasRenderingContext2D.strokeStyle',
+    '-nsIDOMCanvasRenderingContext2D.fillStyle',
+    '-nsIDOMCanvasRenderingContext2D.createImageData',
+    '-nsIDOMCanvasRenderingContext2D.getImageData',
+    '-nsIDOMCanvasRenderingContext2D.putImageData',
+    'nsIDOMTextMetrics.*',
 
-    # dom/public/idl/core
+    # dom/interfaces/core
     'nsIDOMCharacterData.data',
     'nsIDOMCharacterData.length',
     'nsIDOMDocument.documentElement',
@@ -201,6 +171,7 @@ members = [
     'nsIDOMDOMStringList.item',
     'nsIDOMDOMStringList.length',
     'nsIDOMDOMStringList.contains',
+    'nsIDOMDOMTokenList.*',
     'nsIDOMNameList.getName',
     'nsIDOMNameList.contains',
     'nsIDOMNameList.containsNS',
@@ -228,7 +199,7 @@ members = [
     'nsIDOMNSElement.clientTop',
     'nsIDOMNSElement.mozMatchesSelector',
 
-    # dom/public/idl/css
+    # dom/interfaces/css
     'nsIDOMElementCSSInlineStyle.style',
     'nsIDOMCSS2Properties.*',
     'nsIDOMNSCSS2Properties.*',
@@ -238,13 +209,10 @@ members = [
     'nsIDOMRect.bottom',
     'nsIDOMViewCSS.getComputedStyle',
 
-    # dom/public/idl/events
+    # dom/interfaces/events
     'nsIDOMEventTarget.dispatchEvent',
     'nsIDOMEventTarget.removeEventListener',
-    # Conflicts with nsIDOMNSEventTarget.addEventListener;
-    # the conflict is specially resolved in nsDOMClassInfo.cpp.
-    # (See bug 453331.)
-    #'nsIDOMEventTarget.addEventListener',
+    'nsIDOMNSEventTarget.addEventListener',
     'nsIDOMDocumentEvent.createEvent',
 
     'nsIDOMEvent.*',
@@ -269,9 +237,9 @@ members = [
     'nsIDOMNSUIEvent.pageY',
     'nsIDOMNSUIEvent.isChar',
 
-    # dom/public/idl/geolocation - None.
+    # dom/interfaces/geolocation - None.
 
-    # dom/public/idl/html
+    # dom/interfaces/html
     'nsIDOMHTMLAnchorElement.href',
     'nsIDOMHTMLAnchorElement.rel',
     'nsIDOMHTMLAnchorElement.target',
@@ -386,7 +354,7 @@ members = [
     'nsIDOMHTMLCanvasElement.width',
     'nsIDOMHTMLCanvasElement.height',
     'nsIDOMHTMLCanvasElement.getContext',
-    # 'nsIDOMHTMLCanvasElement.toDataURL',  # uses GetCurrentNativeCallContext
+    'nsIDOMHTMLCanvasElement.toDataURL',
     'nsIDOMNSHTMLAnchorElement.text',
     'nsIDOMNSHTMLAnchorElement.search',
     'nsIDOMNSHTMLAnchorElement.hash',
@@ -402,6 +370,7 @@ members = [
     'nsIDOMNSHTMLElement.offsetTop',
     'nsIDOMNSHTMLElement.offsetHeight',
     'nsIDOMNSHTMLElement.offsetWidth',
+    'nsIDOMNSHTMLElement.scrollIntoView',
     'nsIDOMNSHTMLFrameElement.contentWindow',
     'nsIDOMNSHTMLImageElement.complete',
     'nsIDOMNSHTMLInputElement.files',
@@ -410,24 +379,30 @@ members = [
     'nsIDOMNSHTMLInputElement.selectionEnd',
     'nsIDOMNSHTMLInputElement.setSelectionRange',
     'nsIDOMNSHTMLOptionCollection.selectedIndex',
+    'nsIDOMNSHTMLOptionCollection.add',
     'nsIDOMNSHTMLOptionElement.text',
     'nsIDOMNSHTMLSelectElement.item',
     'nsIDOMNSHTMLTextAreaElement.setSelectionRange',
     'nsIDOMNSHTMLTextAreaElement.selectionStart',
     'nsIDOMNSHTMLTextAreaElement.selectionEnd',
     'nsIDOMNSHTMLTextAreaElement.textLength',
+    'nsIDOMNSHTMLTextAreaElement.wrap',
 
-    # dom/public/idl/json - None.
+    # dom/interfaces/json - None.
     # All 4 methods of nsIJSON call GetCurrentNativeCallContext.
 
-    # dom/public/idl/offline - None.
+    # dom/interfaces/load-save - None.
 
-    # dom/public/idl/range
+    # dom/interfaces/offline - None.
+
+    # dom/interfaces/range
     'nsIDOMRange.collapsed',
 
-    # dom/public/idl/sidebar - None.
+    # dom/interfaces/sidebar - None.
 
-    # dom/public/idl/storage
+    # dom/interfaces/smil - None.
+
+    # dom/interfaces/storage
     'nsIDOMToString.toString',
     'nsIDOMStorage.setItem',
     'nsIDOMStorage.length',
@@ -436,21 +411,24 @@ members = [
     'nsIDOMStorage.removeItem',
     'nsIDOMStorage.clear',
     'nsIDOMStorageItem.value',
-    'nsIDOMStorageWindow.sessionStorage',
-    'nsIDOMStorageWindow.globalStorage',
+    'nsIDOMStorageWindow.*',
 
-    # dom/public/idl/stylesheets - None.
+    # dom/interfaces/stylesheets - None.
 
-    # dom/public/idl/traversal
+    # dom/interfaces/svg - None.
+
+    # dom/interfaces/threads - None.
+
+    # dom/interfaces/traversal
     'nsIDOMDocumentTraversal.createNodeIterator',
     'nsIDOMNodeIterator.nextNode',
 
-    # dom/public/idl/views
+    # dom/interfaces/views
     'nsIDOMDocumentView.defaultView',
     
-    # dom/public/idl/xbl - None.
+    # dom/interfaces/xbl - None.
 
-    # dom/public/idl/xpath
+    # dom/interfaces/xpath
     'nsIDOMXPathEvaluator.evaluate',
     'nsIDOMXPathEvaluator.createExpression',
     'nsIDOMXPathEvaluator.createNSResolver',
@@ -466,7 +444,25 @@ members = [
     'nsIDOMXPathResult.singleNodeValue',
     'nsIDOMNSXPathExpression.evaluateWithContext',
 
-    # dom/public/idl/xul - None.
+    # dom/interfaces/xul - None.
+
+    # webgl
+    'nsICanvasRenderingContextWebGL.*',
+    # These all use GetCurrentNativeCallContext and should be
+    # custom-quickstubbed.
+    '-nsICanvasRenderingContextWebGL.getActiveAttrib',
+    '-nsICanvasRenderingContextWebGL.getActiveUniform',
+    '-nsICanvasRenderingContextWebGL.getParameter',
+    '-nsICanvasRenderingContextWebGL.getBufferParameter',
+    '-nsICanvasRenderingContextWebGL.getFramebufferAttachmentParameter',
+    '-nsICanvasRenderingContextWebGL.getRenderbufferParameter',
+    '-nsICanvasRenderingContextWebGL.getProgramParameter',
+    '-nsICanvasRenderingContextWebGL.texParameterf',
+    '-nsICanvasRenderingContextWebGL.texParameteri',
+    '-nsICanvasRenderingContextWebGL.getUniform',
+    '-nsICanvasRenderingContextWebGL.getVertexAttrib',
+    '-nsICanvasRenderingContextWebGL.readPixels',
+    '-nsICanvasRenderingContextWebGL.getShaderParameter',
     ]
 
 # Most interfaces can be found by searching the includePath; to find
@@ -482,7 +478,18 @@ irregularFilenames = {
 
     # stowaways
     'nsIDOMTextMetrics': 'nsIDOMCanvasRenderingContext2D',
+    'nsIDOMCanvasGradient': 'nsIDOMCanvasRenderingContext2D',
+    'nsIDOMCanvasPattern': 'nsIDOMCanvasRenderingContext2D',
     'nsIXPointerResult': 'nsIXPointer',
+
+    'nsIWebGLTexture': 'nsICanvasRenderingContextWebGL',
+    'nsIWebGLBuffer': 'nsICanvasRenderingContextWebGL',
+    'nsIWebGLProgram': 'nsICanvasRenderingContextWebGL',
+    'nsIWebGLShader': 'nsICanvasRenderingContextWebGL',
+    'nsIWebGLShaderArray': 'nsICanvasRenderingContextWebGL',
+    'nsIWebGLFramebuffer': 'nsICanvasRenderingContextWebGL',
+    'nsIWebGLRenderbuffer': 'nsICanvasRenderingContextWebGL',
+    'nsIWebGLActiveInfo': 'nsICanvasRenderingContextWebGL',
     }
 
 customIncludes = [
@@ -490,7 +497,11 @@ customIncludes = [
     'nsIContent.h',
     'nsIDocument.h',
     'nsINodeList.h',
-    'nsCSSPropertiesQS.h'
+    'nsCSSPropertiesQS.h',
+    ]
+
+customQuickStubs = [
+    'CustomQS_WebGL.h'
     ]
 
 nsIDOMNode_GetChildNodes_customMethodCallCode = """
@@ -513,6 +524,12 @@ nsIDOMHTMLDocument_Write_customMethodCallCode = """
     rv = self->%s(arg0);
 """
 
+nsIDOMStorage_Clear_customMethodCallCode = """
+    nsresult rv = self->Clear();
+    if (NS_SUCCEEDED(rv))
+        JS_ClearScope(cx, obj);
+"""
+
 CSS2Properties_ = {
     'thisType': 'nsICSSDeclaration',
     'additionalArguments': 'const nsCSSProperty prop',
@@ -521,6 +538,16 @@ CSS2Properties_ = {
                    '    rv = self->GetPropertyValue(prop, result);',
     'setter_code': '    rv = self->SetPropertyValue(prop, arg0);',
     'canFail': True
+}
+
+CUSTOM_QS = {
+    'skipgen': True,
+    'traceable': False
+}
+
+CUSTOM_QS_TN = {
+    'skipgen': True,
+    'traceable': True
 }
 
 customMethodCalls = {
@@ -565,7 +592,30 @@ customMethodCalls = {
         'code': nsIDOMHTMLDocument_Write_customMethodCallCode % 'Writeln',
         'canFail': True
         },
+    'nsIDOMStorage_Clear': {
+        'code': nsIDOMStorage_Clear_customMethodCallCode
+       }, 
     'nsIDOMCSS2Properties_': CSS2Properties_,
-    'nsIDOMNSCSS2Properties_': CSS2Properties_
+    'nsIDOMNSCSS2Properties_': CSS2Properties_,
+    # WebGL
+    'nsICanvasRenderingContextWebGL_BufferData': CUSTOM_QS,
+    'nsICanvasRenderingContextWebGL_BufferSubData': CUSTOM_QS,
+    'nsICanvasRenderingContextWebGL_TexImage2D': CUSTOM_QS,
+    'nsICanvasRenderingContextWebGL_TexSubImage2D': CUSTOM_QS,
+    'nsICanvasRenderingContextWebGL_Uniform1iv': CUSTOM_QS_TN,
+    'nsICanvasRenderingContextWebGL_Uniform2iv': CUSTOM_QS_TN,
+    'nsICanvasRenderingContextWebGL_Uniform3iv': CUSTOM_QS_TN,
+    'nsICanvasRenderingContextWebGL_Uniform4iv': CUSTOM_QS_TN,
+    'nsICanvasRenderingContextWebGL_Uniform1fv': CUSTOM_QS_TN,
+    'nsICanvasRenderingContextWebGL_Uniform2fv': CUSTOM_QS_TN,
+    'nsICanvasRenderingContextWebGL_Uniform3fv': CUSTOM_QS_TN,
+    'nsICanvasRenderingContextWebGL_Uniform4fv': CUSTOM_QS_TN,
+    'nsICanvasRenderingContextWebGL_UniformMatrix2fv': CUSTOM_QS_TN,
+    'nsICanvasRenderingContextWebGL_UniformMatrix3fv': CUSTOM_QS_TN,
+    'nsICanvasRenderingContextWebGL_UniformMatrix4fv': CUSTOM_QS_TN,
+    'nsICanvasRenderingContextWebGL_VertexAttrib1fv': CUSTOM_QS,
+    'nsICanvasRenderingContextWebGL_VertexAttrib2fv': CUSTOM_QS,
+    'nsICanvasRenderingContextWebGL_VertexAttrib3fv': CUSTOM_QS,
+    'nsICanvasRenderingContextWebGL_VertexAttrib4fv': CUSTOM_QS
     }
 

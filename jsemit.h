@@ -157,8 +157,10 @@ struct JSStmtInfo {
 
 #ifdef JS_SCOPE_DEPTH_METER
 # define JS_SCOPE_DEPTH_METERING(code) ((void) (code))
+# define JS_SCOPE_DEPTH_METERING_IF(cond, code) ((cond) ? (void) (code) : (void) 0)
 #else
 # define JS_SCOPE_DEPTH_METERING(code) ((void) 0)
+# define JS_SCOPE_DEPTH_METERING_IF(code, x) ((void) 0)
 #endif
 
 struct JSTreeContext {              /* tree context for semantic checks */
@@ -208,15 +210,15 @@ struct JSTreeContext {              /* tree context for semantic checks */
     /*
      * For functions the tree context is constructed and destructed a second
      * time during code generation. To avoid a redundant stats update in such
-     * cases, we store (uintN) -1 in maxScopeDepth.
+     * cases, we store uint16(-1) in maxScopeDepth.
      */
     ~JSTreeContext() {
-        JS_SCOPE_DEPTH_METERING(maxScopeDepth == (uintN) -1 ||
-                                JS_BASIC_STATS_ACCUM(&compiler
-                                                       ->context
-                                                       ->runtime
-                                                       ->lexicalScopeDepthStats,
-                                                     maxScopeDepth));
+        JS_SCOPE_DEPTH_METERING_IF((maxScopeDepth != uint16(-1)),
+                                   JS_BASIC_STATS_ACCUM(&compiler
+                                                          ->context
+                                                          ->runtime
+                                                          ->lexicalScopeDepthStats,
+                                                        maxScopeDepth));
     }
 
     uintN blockid() { return topStmt ? topStmt->blockid : bodyid; }
@@ -226,18 +228,20 @@ struct JSTreeContext {              /* tree context for semantic checks */
     /* Test whether we're in a statement of given type. */
     bool inStatement(JSStmtType type);
 
+    inline bool needStrictChecks();
+
     /* 
      * sharpSlotBase is -1 or first slot of pair for [sharpArray, sharpDepth].
      * The parser calls ensureSharpSlots to allocate these two stack locals.
      */
     int sharpSlotBase;
     bool ensureSharpSlots();
-};
 
-/*
- * Flags to propagate out of the blocks.
- */
-#define TCF_RETURN_FLAGS        (TCF_RETURN_EXPR | TCF_RETURN_VOID)
+    // Return true there is a generator function within |skip| lexical scopes
+    // (going upward) from this context's lexical scope. Always return true if
+    // this context is itself a generator.
+    bool skipSpansGenerator(unsigned skip);
+};
 
 #define TCF_COMPILING           0x01 /* JSTreeContext is JSCodeGenerator */
 #define TCF_IN_FUNCTION         0x02 /* parsing inside function body */
@@ -272,7 +276,39 @@ struct JSTreeContext {              /* tree context for semantic checks */
  * between assignment-like and declaration-like destructuring
  * patterns, and why they need to be treated differently.
  */
-#define TCF_DECL_DESTRUCTURING    0x10000
+#define TCF_DECL_DESTRUCTURING  0x10000
+
+/*
+ * A request flag passed to JSCompiler::compileScript and then down via
+ * JSCodeGenerator to js_NewScriptFromCG, from script_compile_sub and any
+ * kindred functions that need to make mutable scripts (even empty ones;
+ * i.e., they can't share the const JSScript::emptyScript() singleton).
+ */
+#define TCF_NEED_MUTABLE_SCRIPT 0x20000
+
+/*
+ * This function/global/eval code body contained a Use Strict Directive. Treat
+ * certain strict warnings as errors, and forbid the use of 'with'. See also
+ * TSF_STRICT_MODE_CODE, JSScript::strictModeCode, and JSREPORT_STRICT_ERROR.
+ */
+#define TCF_STRICT_MODE_CODE    0x40000
+
+/* Function has parameter named 'eval'. */
+#define TCF_FUN_PARAM_EVAL      0x80000
+
+/*
+ * Flag signifying that the current function seems to be a constructor that
+ * sets this.foo to define "methods", at least one of which can't be a null
+ * closure, so we should avoid over-specializing property cache entries and
+ * trace inlining guards to method function object identity, which will vary
+ * per instance.
+ */
+#define TCF_FUN_UNBRAND_THIS   0x100000
+
+/*
+ * Flags to check for return; vs. return expr; in a function.
+ */
+#define TCF_RETURN_FLAGS        (TCF_RETURN_EXPR | TCF_RETURN_VOID)
 
 /*
  * Sticky deoptimization flags to propagate from FunctionBody.
@@ -283,7 +319,17 @@ struct JSTreeContext {              /* tree context for semantic checks */
                                  TCF_FUN_HEAVYWEIGHT     |                    \
                                  TCF_FUN_IS_GENERATOR    |                    \
                                  TCF_FUN_USES_OWN_NAME   |                    \
-                                 TCF_HAS_SHARPS)
+                                 TCF_HAS_SHARPS          |                    \
+                                 TCF_STRICT_MODE_CODE)
+
+/*
+ * Return true if we need to check for conditions that elicit
+ * JSOPTION_STRICT warnings or strict mode errors.
+ */
+inline bool JSTreeContext::needStrictChecks() {
+    return JS_HAS_STRICT_OPTION(compiler->context) ||
+           (flags & TCF_STRICT_MODE_CODE);
+}
 
 /*
  * Span-dependent instructions are jumps whose span (from the jump bytecode to

@@ -49,6 +49,8 @@
 
 #ifdef WIN32
 #    include <windows.h>
+#else
+#    include <signal.h>
 #endif
 
 /*
@@ -63,10 +65,15 @@ JS_PUBLIC_API(void) JS_Assert(const char *s, const char *file, JSIntn ln)
 #if defined(WIN32)
     DebugBreak();
     exit(3);
-#elif defined(XP_OS2) || (defined(__GNUC__) && defined(__i386))
-    asm("int $3");
+#elif defined(__APPLE__)
+    /*
+     * On Mac OS X, Breakpad ignores signals. Only real Mach exceptions are
+     * trapped.
+     */
+    *((int *) NULL) = 0;  /* To continue from here in GDB: "return" then "continue". */
+#else
+    raise(SIGABRT);  /* To continue from here in GDB: "signal 0". */
 #endif
-    abort();
 }
 
 #ifdef JS_BASIC_STATS

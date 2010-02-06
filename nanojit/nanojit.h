@@ -91,15 +91,15 @@ namespace nanojit
 
     const uint32_t MAXARGS = 8;
 
-    #ifdef MOZ_NO_VARADIC_MACROS
-        static void NanoAssertMsgf(bool a,const char *f,...) {}
-        static void NanoAssertMsg(bool a,const char *m) {}
-        static void NanoAssert(bool a) {}
+    #ifdef NJ_NO_VARIADIC_MACROS
+        inline void NanoAssertMsgf(bool a,const char *f,...) {}
+        inline void NanoAssertMsg(bool a,const char *m) {}
+        inline void NanoAssert(bool a) {}
     #elif defined(_DEBUG)
 
         #define __NanoAssertMsgf(a, file_, line_, f, ...)  \
             if (!(a)) { \
-                fprintf(stderr, "Assertion failed: " f "%s (%s:%d)\n", __VA_ARGS__, #a, file_, line_); \
+                avmplus::AvmLog("Assertion failed: " f "%s (%s:%d)\n", __VA_ARGS__, #a, file_, line_); \
                 NanoAssertFail(); \
             }
 
@@ -137,14 +137,14 @@ namespace nanojit
 
 #ifdef AVMPLUS_VERBOSE
 #ifndef NJ_VERBOSE_DISABLED
-	#define NJ_VERBOSE 1
+    #define NJ_VERBOSE 1
 #endif
 #ifndef NJ_PROFILE_DISABLED
-	#define NJ_PROFILE 1
+    #define NJ_PROFILE 1
 #endif
 #endif
 
-#ifdef MOZ_NO_VARADIC_MACROS
+#ifdef NJ_NO_VARIADIC_MACROS
     #include <stdio.h>
     #define verbose_outputf            if (_logc->lcbits & LC_Assembly) \
                                         Assembler::outputf
@@ -234,14 +234,13 @@ namespace nanojit {
            and below, so that callers can use bits 16 and above for
            themselves. */
         // TODO: add entries for the writer pipeline
-        LC_FragProfile = 1<<7, // collect per-frag usage counts
-        LC_Activation  = 1<<6, // enable printActivationState
-        LC_Liveness    = 1<<5, // (show LIR liveness analysis)
-        LC_ReadLIR     = 1<<4, // As read from LirBuffer
-        LC_AfterSF     = 1<<3, // After StackFilter
-        LC_RegAlloc    = 1<<2, // stuff to do with reg alloc
-        LC_Assembly    = 1<<1, // final assembly
-        LC_NoCodeAddrs = 1<<0  // (don't show code addresses on asm output)
+        LC_FragProfile = 1<<6, // collect per-frag usage counts
+        LC_Activation  = 1<<5, // enable printActivationState
+        LC_Liveness    = 1<<4, // (show LIR liveness analysis)
+        LC_ReadLIR     = 1<<3, // As read from LirBuffer
+        LC_AfterSF     = 1<<2, // After StackFilter
+        LC_RegAlloc    = 1<<1, // stuff to do with reg alloc
+        LC_Assembly    = 1<<0  // final assembly
     };
 
     class LogControl

@@ -49,8 +49,88 @@
  * is reference counted and the slot vector is malloc'ed.
  */
 #include "jshash.h" /* Added by JSIFY */
-#include "jsprvtd.h"
 #include "jspubtd.h"
+#include "jsprvtd.h"
+
+/*
+ * A representation of ECMA-262 ed. 5's internal property descriptor data
+ * structure.
+ */
+struct PropertyDescriptor {
+  friend class AutoDescriptorArray;
+
+  private:
+    PropertyDescriptor();
+
+  public:
+    /* 8.10.5 ToPropertyDescriptor(Obj) */
+    bool initialize(JSContext* cx, jsid id, jsval v);
+
+    /* 8.10.1 IsAccessorDescriptor(desc) */
+    bool isAccessorDescriptor() const {
+        return hasGet || hasSet;
+    }
+
+    /* 8.10.2 IsDataDescriptor(desc) */
+    bool isDataDescriptor() const {
+        return hasValue || hasWritable;
+    }
+
+    /* 8.10.3 IsGenericDescriptor(desc) */
+    bool isGenericDescriptor() const {
+        return !isAccessorDescriptor() && !isDataDescriptor();
+    }
+
+    bool configurable() const {
+        return (attrs & JSPROP_PERMANENT) == 0;
+    }
+
+    bool enumerable() const {
+        return (attrs & JSPROP_ENUMERATE) != 0;
+    }
+
+    bool writable() const {
+        return (attrs & JSPROP_READONLY) == 0;
+    }
+
+    JSObject* getterObject() const {
+        return get != JSVAL_VOID ? JSVAL_TO_OBJECT(get) : NULL;
+    }
+    JSObject* setterObject() const {
+        return set != JSVAL_VOID ? JSVAL_TO_OBJECT(set) : NULL;
+    }
+
+    jsval getterValue() const {
+        return get;
+    }
+    jsval setterValue() const {
+        return set;
+    }
+
+    JSPropertyOp getter() const {
+        return js_CastAsPropertyOp(getterObject());
+    }
+    JSPropertyOp setter() const {
+        return js_CastAsPropertyOp(setterObject());
+    }
+
+    static void traceDescriptorArray(JSTracer* trc, JSObject* obj);
+    static void finalizeDescriptorArray(JSContext* cx, JSObject* obj);
+
+    jsid id;
+    jsval value, get, set;
+
+    /* Property descriptor boolean fields. */
+    uint8 attrs;
+
+    /* Bits indicating which values are set. */
+    bool hasGet : 1;
+    bool hasSet : 1;
+    bool hasValue : 1;
+    bool hasWritable : 1;
+    bool hasEnumerable : 1;
+    bool hasConfigurable : 1;
+};
 
 JS_BEGIN_EXTERN_C
 
@@ -145,13 +225,17 @@ const uintptr_t JSSLOT_CLASS_MASK_BITS = 3;
  * records the number of available slots.
  */
 struct JSObject {
-    JSObjectMap *map;                       /* propery map, see jsscope.h */
-    jsuword     classword;                  /* classword, see above */
+    JSObjectMap *map;                       /* property map, see jsscope.h */
+    jsuword     classword;                  /* JSClass ptr | bits, see above */
     jsval       fslots[JS_INITIAL_NSLOTS];  /* small number of fixed slots */
     jsval       *dslots;                    /* dynamically allocated slots */
 
     JSClass *getClass() const {
         return (JSClass *) (classword & ~JSSLOT_CLASS_MASK_BITS);
+    }
+
+    bool hasClass(const JSClass *clasp) const {
+        return clasp == getClass();
     }
 
     bool isDelegate() const {
@@ -233,7 +317,7 @@ struct JSObject {
 
     /* The map field is not initialized here and should be set separately. */
     void init(JSClass *clasp, JSObject *proto, JSObject *parent,
-              jsval privateSlotValue, jsval *nullPtr) {
+              jsval privateSlotValue) {
         JS_ASSERT(((jsuword) clasp & 3) == 0);
         JS_STATIC_ASSERT(JSSLOT_PRIVATE + 3 == JS_INITIAL_NSLOTS);
         JS_ASSERT_IF(clasp->flags & JSCLASS_HAS_PRIVATE,
@@ -248,8 +332,20 @@ struct JSObject {
         fslots[JSSLOT_PRIVATE] = privateSlotValue;
         fslots[JSSLOT_PRIVATE + 1] = JSVAL_VOID;
         fslots[JSSLOT_PRIVATE + 2] = JSVAL_VOID;
-        dslots = nullPtr;
+        dslots = NULL;
     }
+
+    /*
+     * Like init, but also initializes map. The catch: proto must be the result
+     * of a call to js_InitClass(...clasp, ...).
+     */
+    inline void initSharingEmptyScope(JSClass *clasp, JSObject *proto, JSObject *parent,
+                                      jsval privateSlotValue);
+
+    inline bool hasSlotsArray() const { return dslots; }
+
+    /* This method can only be called when hasSlotsArray() returns true. */
+    inline void freeSlotsArray(JSContext *cx);
 
     JSBool lookupProperty(JSContext *cx, jsid id,
                           JSObject **objp, JSProperty **propp) {
@@ -308,6 +404,14 @@ struct JSObject {
         if (map->ops->dropProperty)
             map->ops->dropProperty(cx, this, prop);
     }
+
+    inline bool isArray() const;
+    inline bool isDenseArray() const;
+    inline bool isFunction() const;
+    inline bool isRegExp() const;
+    inline bool isXML() const;
+
+    inline bool unbrand(JSContext *cx);
 };
 
 /* Compatibility macros. */
@@ -349,7 +453,7 @@ struct JSObject {
  */
 
 #define STOBJ_NSLOTS(obj)                                                     \
-    (DSLOTS_IS_NOT_NULL(obj) ? (uint32)(obj)->dslots[-1] : (uint32)JS_INITIAL_NSLOTS)
+    ((obj)->dslots ? (uint32)(obj)->dslots[-1] : (uint32)JS_INITIAL_NSLOTS)
 
 inline jsval&
 STOBJ_GET_SLOT(JSObject *obj, uintN slot)
@@ -504,7 +608,7 @@ extern JSBool
 js_DefineBlockVariable(JSContext *cx, JSObject *obj, jsid id, intN index);
 
 #define OBJ_BLOCK_COUNT(cx,obj)                                               \
-    (OBJ_SCOPE(obj)->entryCount)
+    (OBJ_SCOPE(OBJ_IS_CLONED_BLOCK(obj) ? obj->getProto() : obj)->entryCount)
 #define OBJ_BLOCK_DEPTH(cx,obj)                                               \
     JSVAL_TO_INT(STOBJ_GET_SLOT(obj, JSSLOT_BLOCK_DEPTH))
 #define OBJ_SET_BLOCK_DEPTH(cx,obj,depth)                                     \
@@ -574,7 +678,7 @@ js_HasOwnPropertyHelper(JSContext *cx, JSLookupPropOp lookup, uintN argc,
 
 extern JSBool
 js_HasOwnProperty(JSContext *cx, JSLookupPropOp lookup, JSObject *obj, jsid id,
-                  JSBool *foundp);
+                  JSObject **objp, JSProperty **propp);
 
 extern JSBool
 js_PropertyIsEnumerable(JSContext *cx, JSObject *obj, jsid id, jsval *vp);
@@ -622,14 +726,17 @@ js_NewObjectWithGivenProto(JSContext *cx, JSClass *clasp, JSObject *proto,
  * Allocate a new native object with the given value of the proto and private
  * slots. The parent slot is set to the value of proto's parent slot.
  *
+ * clasp must be a native class. proto must be the result of a call to
+ * js_InitClass(...clasp, ...).
+ *
  * Note that this is the correct global object for native class instances, but
  * not for user-defined functions called as constructors.  Functions used as
  * constructors must create instances parented by the parent of the function
  * object, not by the parent of its .prototype object value.
  */
 extern JSObject*
-js_NewNativeObject(JSContext *cx, JSClass *clasp, JSObject *proto,
-                   jsval privateSlotValue);
+js_NewObjectWithClassProto(JSContext *cx, JSClass *clasp, JSObject *proto,
+                           jsval privateSlotValue);
 
 /*
  * Fast access to immutable standard objects (constructors and prototypes).
@@ -659,13 +766,6 @@ js_GrowSlots(JSContext *cx, JSObject *obj, size_t nslots);
 
 extern void
 js_ShrinkSlots(JSContext *cx, JSObject *obj, size_t nslots);
-
-static inline void
-js_FreeSlots(JSContext *cx, JSObject *obj)
-{
-    if (DSLOTS_IS_NOT_NULL(obj))
-        js_ShrinkSlots(cx, obj, 0);
-}
 
 /*
  * Ensure that the object has at least JSCLASS_RESERVED_SLOTS(clasp)+nreserved
@@ -852,7 +952,7 @@ js_GetMethod(JSContext *cx, JSObject *obj, jsid id, uintN getHow, jsval *vp);
  * Check whether it is OK to assign an undeclared property of the global
  * object at the current script PC.
  */
-extern JS_FRIEND_API(JSBool)
+extern JS_FRIEND_API(bool)
 js_CheckUndeclaredVarAssignment(JSContext *cx);
 
 extern JSBool
@@ -980,41 +1080,11 @@ js_ComputeFilename(JSContext *cx, JSStackFrame *caller,
 extern JSBool
 js_IsCallable(JSObject *obj, JSContext *cx);
 
-void
+extern JSBool
 js_ReportGetterOnlyAssignment(JSContext *cx);
 
 extern JS_FRIEND_API(JSBool)
 js_GetterOnlyPropertyStub(JSContext *cx, JSObject *obj, jsval id, jsval *vp);
-
-/*
- * If an object is "similar" to its prototype, it can share OBJ_SCOPE(proto)->emptyScope.
- * Similar objects have the same JSObjectOps and the same private and reserved slots.
- *
- * We assume that if prototype and object are of the same class, they always
- * have the same number of computed reserved slots (returned via
- * clasp->reserveSlots). This is true for builtin classes (except Block, and
- * for this reason among others Blocks must never be exposed to scripts).
- *
- * Otherwise, prototype and object classes must have the same (null or not)
- * reserveSlots hook.
- *
- * FIXME: This fails to distinguish between objects with different addProperty
- * hooks. See bug 505523.
- */
-static inline bool
-js_ObjectIsSimilarToProto(JSContext *cx, JSObject *obj, const JSObjectOps *ops,
-                          JSClass *clasp, JSObject *proto)
-{
-    JS_ASSERT(proto == OBJ_GET_PROTO(cx, obj));
-
-    JSClass *protoclasp;
-    return (proto->map->ops == ops &&
-            ((protoclasp = OBJ_GET_CLASS(cx, proto)) == clasp ||
-             (!((protoclasp->flags ^ clasp->flags) &
-                (JSCLASS_HAS_PRIVATE |
-                 (JSCLASS_RESERVED_SLOTS_MASK << JSCLASS_RESERVED_SLOTS_SHIFT))) &&
-              protoclasp->reserveSlots == clasp->reserveSlots)));
-}
 
 #ifdef DEBUG
 JS_FRIEND_API(void) js_DumpChars(const jschar *s, size_t n);

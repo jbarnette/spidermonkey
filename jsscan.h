@@ -166,6 +166,14 @@ struct JSTokenPtr {
     uint32              index;          /* index of char in physical line */
     uint32              lineno;         /* physical line number */
 
+    bool operator==(const JSTokenPtr& bptr) {
+        return index == bptr.index && lineno == bptr.lineno;
+    }
+
+    bool operator!=(const JSTokenPtr& bptr) {
+        return index != bptr.index || lineno != bptr.lineno;
+    }
+
     bool operator <(const JSTokenPtr& bptr) {
         return lineno < bptr.lineno ||
                (lineno == bptr.lineno && index < bptr.index);
@@ -188,6 +196,14 @@ struct JSTokenPtr {
 struct JSTokenPos {
     JSTokenPtr          begin;          /* first character and line of token */
     JSTokenPtr          end;            /* index 1 past last char, last line */
+
+    bool operator==(const JSTokenPos& bpos) {
+        return begin == bpos.begin && end == bpos.end;
+    }
+
+    bool operator!=(const JSTokenPos& bpos) {
+        return begin != bpos.begin || end != bpos.end;
+    }
 
     bool operator <(const JSTokenPos& bpos) {
         return begin < bpos.begin;
@@ -329,6 +345,9 @@ struct JSTokenStream {
 /* Ignore keywords and return TOK_NAME instead to the parser. */
 #define TSF_KEYWORD_IS_NAME 0x4000
 
+/* Tokenize as appropriate for strict mode code.  */
+#define TSF_STRICT_MODE_CODE 0x8000
+
 /* Unicode separators that are treated as line terminators, in addition to \n, \r */
 #define LINE_SEPARATOR  0x2028
 #define PARA_SEPARATOR  0x2029
@@ -350,8 +369,7 @@ js_CheckKeyword(const jschar *chars, size_t length);
  * Friend-exported API entry point to call a mapping function on each reserved
  * identifier in the scanner's keyword table.
  */
-extern JS_FRIEND_API(void)
-js_MapKeywords(void (*mapfun)(const char *));
+typedef void (*JSMapKeywordFun)(const char *);
 
 /*
  * Check that str forms a valid JS identifier name. The function does not
@@ -365,9 +383,30 @@ js_IsIdentifier(JSString *str);
  * for an error. When pn is not null, use it to report error's location.
  * Otherwise use ts, which must not be null.
  */
-JSBool
+bool
 js_ReportCompileErrorNumber(JSContext *cx, JSTokenStream *ts, JSParseNode *pn,
                             uintN flags, uintN errorNumber, ...);
+
+/*
+ * Report a condition that should elicit a warning with JSOPTION_STRICT,
+ * or an error if ts or tc is handling strict mode code.  This function
+ * defers to js_ReportCompileErrorNumber to do the real work.  Either tc
+ * or ts may be NULL, if there is no tree context or token stream state
+ * whose strictness should affect the report.
+ *
+ * One could have js_ReportCompileErrorNumber recognize the
+ * JSREPORT_STRICT_MODE_ERROR flag instead of having a separate function
+ * like this one.  However, the strict mode code flag we need to test is
+ * in the JSTreeContext structure for that code; we would have to change
+ * the ~120 js_ReportCompileErrorNumber calls to pass the additional
+ * argument, even though many of those sites would never use it.  Using
+ * ts's TSF_STRICT_MODE_CODE flag instead of tc's would be brittle: at some
+ * points ts's flags don't correspond to those of the tc relevant to the
+ * error.
+ */
+bool
+js_ReportStrictModeError(JSContext *cx, JSTokenStream *ts, JSTreeContext *tc,
+                         JSParseNode *pn, uintN errorNumber, ...);
 
 /*
  * Steal one JSREPORT_* bit (see jsapi.h) to tell that arguments to the error

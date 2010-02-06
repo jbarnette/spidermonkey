@@ -210,6 +210,9 @@ dnl ========================================================
 dnl Checks for compilers.
 dnl ========================================================
 
+dnl AR_FLAGS set here so HOST_AR_FLAGS can be set correctly (see bug 538269)
+AR_FLAGS='cr $@'
+
 if test "$COMPILE_ENVIRONMENT"; then
 
 if test "$target" != "$host"; then
@@ -240,6 +243,9 @@ if test "$target" != "$host"; then
     fi
     if test -z "$HOST_LDFLAGS"; then
         HOST_LDFLAGS="$LDFLAGS"
+    fi
+    if test -z "$HOST_AR_FLAGS"; then
+        HOST_AR_FLAGS="$AR_FLAGS"
     fi
     AC_CHECK_PROGS(HOST_RANLIB, $HOST_RANLIB ranlib, ranlib, :)
     AC_CHECK_PROGS(HOST_AR, $HOST_AR ar, ar, :)
@@ -370,7 +376,10 @@ else
         HOST_RANLIB="$RANLIB"
     fi
     if test -z "$HOST_AR"; then
-       HOST_AR="$AR"
+        HOST_AR="$AR"
+    fi
+    if test -z "$HOST_AR_FLAGS"; then
+        HOST_AR_FLAGS="$AR_FLAGS"
     fi
 fi
 
@@ -417,7 +426,7 @@ fi
 dnl Special win32 checks
 dnl ========================================================
 case "$target" in
-*-wince)
+*-wince|*-winmo)
     WINVER=500
     ;;
 *)
@@ -430,7 +439,7 @@ case "$target" in
 esac
 
 case "$target" in
-*-cygwin*|*-mingw*|*-msvc*|*-mks*|*-wince)
+*-cygwin*|*-mingw*|*-msvc*|*-mks*|*-wince|*-winmo)
     if test "$GCC" != "yes"; then
         # Check to see if we are really running in a msvc environemnt
         _WIN32_MSVC=1
@@ -485,6 +494,13 @@ case "$target" in
             AC_DEFINE(_CRT_NONSTDC_NO_DEPRECATE)
         elif test "$_CC_MAJOR_VERSION" = "15"; then
             _CC_SUITE=9
+            CXXFLAGS="$CXXFLAGS -Zc:wchar_t-"
+            LDFLAGS="$LDFLAGS -MANIFESTUAC:NO"
+            _USE_DYNAMICBASE=1
+            AC_DEFINE(_CRT_SECURE_NO_WARNINGS)
+            AC_DEFINE(_CRT_NONSTDC_NO_WARNINGS)
+        elif test "$_CC_MAJOR_VERSION" = "16"; then
+            _CC_SUITE=10
             CXXFLAGS="$CXXFLAGS -Zc:wchar_t-"
             LDFLAGS="$LDFLAGS -MANIFESTUAC:NO"
             _USE_DYNAMICBASE=1
@@ -605,7 +621,7 @@ if test -n "$_WIN32_MSVC"; then
     AC_DEFINE(JS_HAVE___INTN)
 
     case "$target" in
-    *-wince)
+    *-wince|*-winmo)
         AC_DEFINE(HAVE_SYSTEMTIMETOFILETIME)
         AC_DEFINE(JS_CRTDEFS_H_HAS_INTPTR_T)
         ;;
@@ -840,14 +856,16 @@ fi
 
 fi # COMPILE_ENVIRONMENT
 
-case "$host_os" in
-cygwin*|mingw*|mks*|msvc*)
-    MOZ_PATH_PROGS(MAKE, $MAKE make gmake, :)
-    ;;
-*)
-    MOZ_PATH_PROGS(MAKE, $MAKE gmake make, :)
-    ;;
-esac
+if test -z "$MAKE"; then
+    case "$host_os" in
+    cygwin*|mingw*|mks*|msvc*)
+        MOZ_PATH_PROGS(MAKE, $MAKE make gmake, :)
+        ;;
+    *)
+        MOZ_PATH_PROGS(MAKE, $MAKE gmake make, :)
+        ;;
+    esac
+fi
 
 if test "$COMPILE_ENVIRONMENT"; then
 
@@ -861,7 +879,6 @@ dnl ========================================================
 dnl set the defaults first
 dnl ========================================================
 AS_BIN=$AS
-AR_FLAGS='cr $@'
 AR_LIST='$(AR) t'
 AR_EXTRACT='$(AR) x'
 AR_DELETE='$(AR) d'
@@ -879,8 +896,6 @@ DIRENT_INO=d_ino
 CYGWIN_WRAPPER=
 WIN_TOP_SRC=
 MOZ_USER_DIR=".mozilla"
-HOST_AR='$(AR)'
-HOST_AR_FLAGS='$(AR_FLAGS)'
 
 MOZ_JS_LIBS='-L$(libdir) -lmozjs'
 MOZ_FIX_LINK_PATHS='-Wl,-rpath-link,$(LIBXUL_DIST)/bin -Wl,-rpath-link,$(PREFIX)/lib'
@@ -903,6 +918,7 @@ if test -n "$CROSS_COMPILE"; then
         solaris*)     OS_ARCH=SunOS OS_RELEASE=5 ;;
         mingw*)       OS_ARCH=WINNT ;;
         wince*)       OS_ARCH=WINCE ;;
+        winmo*)       OS_ARCH=WINCE ;;
         darwin*)      OS_ARCH=Darwin OS_TARGET=Darwin ;;
     esac
 else
@@ -1114,7 +1130,11 @@ UnixWare)
 WINCE)
     WINCE=1
     OS_ARCH=WINCE
-    OS_TARGET=WINCE
+    if test "$WINCE_WINDOWS_MOBILE"; then
+        OS_TARGET=WINMO
+    else
+        OS_TARGET=WINCE
+    fi
     ;;
 Darwin)
     case "${target_cpu}" in
@@ -1170,7 +1190,7 @@ x86_64 | ia64)
     ;;
 
 arm)
-    if test "$OS_TARGET" = "WINCE"; then
+    if test "$OS_ARCH" = "WINCE"; then
         CPU_ARCH="$OS_TEST"
     fi
     ;;
@@ -1449,7 +1469,7 @@ case "$host" in
     HOST_OPTIMIZE_FLAGS="${HOST_OPTIMIZE_FLAGS=-O3}"
     ;;
 
-*cygwin*|*mingw*|*mks*|*msvc*|*wince)
+*cygwin*|*mingw*|*mks*|*msvc*|*wince|*winmo)
     if test -n "$_WIN32_MSVC"; then
         HOST_AR=lib
         HOST_AR_FLAGS='-NOLOGO -OUT:"$@"'
@@ -1788,7 +1808,7 @@ case "$target" in
     esac
     ;;
 
-*-wince*)
+*-wince*|*-winmo*)
     TARGET_COMPILER_ABI=msvc
     MOZ_TOOLS_DIR=`echo $MOZ_TOOLS`
     AR_LIST="$AR -list"
@@ -2205,7 +2225,7 @@ case "$target" in
     MOZ_DEBUG_FLAGS="-g -fno-inline"
     MOZ_OPTIMIZE_FLAGS="-O2"
     MOZ_OPTIMIZE_LDFLAGS="-s -Zlinker /EXEPACK:2 -Zlinker /PACKCODE -Zlinker /PACKDATA"
-    DYNAMIC_XPCOM_LIBS='-L$(LIBXUL_DIST)/lib $(LIBXUL_DIST)/lib/xpcom.lib $(LIBXUL_DIST)/lib/xpcomcor.lib'
+    DYNAMIC_XPCOM_LIBS='-L$(LIBXUL_DIST)/lib $(LIBXUL_DIST)/lib/xpcom.lib $(LIBXUL_DIST)/lib/xpcom_core.lib'
     LIBXUL_LIBS='-L$(LIBXUL_DIST)/lib $(LIBXUL_DIST)/lib/xpcom.lib $(LIBXUL_DIST)/lib/xul.lib'
     TARGET_MD_ARCH=os2
     _PLATFORM_DEFAULT_TOOLKIT="cairo-os2"
@@ -2292,7 +2312,6 @@ alpha*-*-osf*)
     fi
     ;;
 
-dnl the qsort routine under solaris is faulty
 *-solaris*) 
     AC_DEFINE(SOLARIS)
     TARGET_NSPR_MDCPUCFG='\"md/_solaris.cfg\"'
@@ -2419,7 +2438,7 @@ case "$target" in
 *-openvms*)
     NO_LD_ARCHIVE_FLAGS=
     ;;
-*-msvc*|*-mks*|*-mingw*|*-cygwin*|*-wince)
+*-msvc*|*-mks*|*-mingw*|*-cygwin*|*-wince|*-winmo)
     if test -z "$GNU_CC"; then
         NO_LD_ARCHIVE_FLAGS=
     fi
@@ -2462,7 +2481,7 @@ case "$target" in
     *-darwin*)
         MOZ_COMPONENTS_VERSION_SCRIPT_LDFLAGS='-Wl,-exported_symbols_list -Wl,$(BUILD_TOOLS)/gnu-ld-scripts/components-export-list'
         ;;
-    *-cygwin*|*-mingw*|*-mks*|*-msvc|*-wince)
+    *-cygwin*|*-mingw*|*-mks*|*-msvc|*-wince|*-winmo)
         if test -n "$GNU_CC"; then
            MOZ_COMPONENTS_VERSION_SCRIPT_LDFLAGS='-Wl,--version-script,$(BUILD_TOOLS)/gnu-ld-scripts/components-version-script'
         fi
@@ -2534,7 +2553,7 @@ solaris*)
 freebsd*|kfreebsd*)
     AC_DEFINE(AVMPLUS_UNIX)
     ;;
-*cygwin*|*mingw*|*mks*|*msvc*|*wince)
+*cygwin*|*mingw*|*mks*|*msvc*|*wince|*winmo)
     AC_DEFINE(AVMPLUS_WIN32)
     ;;
 *os2*)
@@ -3246,7 +3265,7 @@ if test "$ac_cv_func_gnu_get_libc_version" = "yes"; then
 fi
 
 case $target_os in
-    os2*|msvc*|mks*|cygwin*|mingw*|darwin*|wince*|beos*)
+    os2*|msvc*|mks*|cygwin*|mingw*|darwin*|wince*|winmo*|beos*)
         ;;
     *)
     
@@ -3985,7 +4004,7 @@ MOZ_DEBUG_ENABLE_DEFS="-DDEBUG -D_DEBUG"
     beos*)
         MOZ_DEBUG_ENABLE_DEFS="$MOZ_DEBUG_ENABLE_DEFS -DDEBUG_${USER}"
         ;;
-    msvc*|mks*|cygwin*|mingw*|os2*|wince*)
+    msvc*|mks*|cygwin*|mingw*|os2*|wince*|winmo*)
         MOZ_DEBUG_ENABLE_DEFS="$MOZ_DEBUG_ENABLE_DEFS -DDEBUG_`echo ${USERNAME} | sed -e 's| |_|g'`"
         ;;
     *) 
@@ -4171,7 +4190,7 @@ if test "$MOZ_MEMORY"; then
     AC_DEFINE(MOZ_MEMORY_WINDOWS)
     # the interesting bits will get passed down in MOZ_MEMORY_LDFLAGS
     ;;
-  *wince)
+  *wince|*winmo)
     AC_DEFINE(MOZ_MEMORY_WINCE)
     AC_DEFINE(MOZ_MEMORY_WINDOWS)
     ;;
@@ -4790,7 +4809,7 @@ EDITLINE_LIBS=
 JS_DISABLE_SHELL=
 
 case "$target" in
-*-wince*|*-mingw*|*-cygwin*|*-msvc*|*-mks*)
+*-wince*|*-winmo*|*-mingw*|*-cygwin*|*-msvc*|*-mks*)
     NO_EDITLINE=1
     ;;
 *-symbian*)

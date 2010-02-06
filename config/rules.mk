@@ -155,7 +155,7 @@ SOLO_FILE ?= $(error Specify a test filename in SOLO_FILE when using check-inter
 
 libs::
 	$(foreach dir,$(XPCSHELL_TESTS),$(_INSTALL_TESTS))
-	$(PERL) -I$(MOZILLA_DIR)/config $(MOZILLA_DIR)/config/build-list.pl \
+	$(PYTHON) $(MOZILLA_DIR)/config/buildlist.py \
           $(testxpcobjdir)/all-test-dirs.list \
           $(addprefix $(MODULE)/,$(XPCSHELL_TESTS))
 
@@ -229,10 +229,6 @@ endif # ENABLE_TESTS
 
 ifndef LIBRARY
 ifdef STATIC_LIBRARY_NAME
-ifeq (OS2,$(OS_ARCH))
-STATIC_LIBRARY_NAME	:= $(SHORT_LIBNAME)
-SHARED_LIBRARY_NAME	:= $(SHORT_LIBNAME)
-endif
 LIBRARY			:= $(LIB_PREFIX)$(STATIC_LIBRARY_NAME).$(LIB_SUFFIX)
 endif # STATIC_LIBRARY_NAME
 endif # LIBRARY
@@ -251,6 +247,16 @@ ifdef LIB_IS_C_ONLY
 MKSHLIB			= $(MKCSHLIB)
 endif
 
+ifneq (,$(filter OS2 WINNT WINCE,$(OS_ARCH)))
+IMPORT_LIBRARY		:= $(LIB_PREFIX)$(SHARED_LIBRARY_NAME).$(IMPORT_LIB_SUFFIX)
+endif
+
+ifeq (OS2,$(OS_ARCH))
+ifdef SHORT_LIBNAME
+SHARED_LIBRARY_NAME	:= $(SHORT_LIBNAME)
+endif
+endif
+
 ifdef MAKE_FRAMEWORK
 SHARED_LIBRARY		:= $(SHARED_LIBRARY_NAME)
 else
@@ -259,10 +265,6 @@ endif
 
 ifeq ($(OS_ARCH),OS2)
 DEF_FILE		:= $(SHARED_LIBRARY:.dll=.def)
-endif
-
-ifneq (,$(filter OS2 WINNT WINCE,$(OS_ARCH)))
-IMPORT_LIBRARY		:= $(LIB_PREFIX)$(SHARED_LIBRARY_NAME).$(IMPORT_LIB_SUFFIX)
 endif
 
 ifdef MOZ_ENABLE_LIBXUL
@@ -357,6 +359,13 @@ endif # _MSC_VER
 endif # GNU_CC
 endif # ENABLE_CXX_EXCEPTIONS
 endif # WINNT
+
+ifeq ($(SOLARIS_SUNPRO_CXX),1)
+CXXFLAGS += -features=extensions -D__FUNCTION__=__func__
+ifeq (86,$(findstring 86,$(OS_TEST)))
+OS_LDFLAGS += -M $(topsrcdir)/config/solaris_ia32.map
+endif # x86
+endif # Solaris Sun Studio C++
 
 ifeq (,$(filter-out WINNT WINCE,$(HOST_OS_ARCH)))
 HOST_PDBFILE=$(basename $(@F)).pdb
@@ -690,7 +699,7 @@ ifneq (,$(filter WINCE,$(OS_ARCH)))
 OUTOPTION = -Fo# eol
 endif
 
-ifeq ($(OS_TARGET), WINCE)
+ifeq ($(OS_ARCH), WINCE)
 OUTOPTION = -Fo# eol
 HOST_OUTOPTION = -Fo# eol
 else
@@ -815,13 +824,13 @@ ifdef LIBRARY_NAME
 ifdef EXPORT_LIBRARY
 ifdef IS_COMPONENT
 ifdef BUILD_STATIC_LIBS
-	@$(PERL) -I$(MOZILLA_DIR)/config $(MOZILLA_DIR)/config/build-list.pl $(FINAL_LINK_COMPS) $(STATIC_LIBRARY_NAME)
+	@$(PYTHON) $(MOZILLA_DIR)/config/buildlist.py $(FINAL_LINK_COMPS) $(STATIC_LIBRARY_NAME)
 ifdef MODULE_NAME
-	@$(PERL) -I$(MOZILLA_DIR)/config $(MOZILLA_DIR)/config/build-list.pl $(FINAL_LINK_COMP_NAMES) $(MODULE_NAME)
+	@$(PYTHON) $(MOZILLA_DIR)/config/buildlist.py $(FINAL_LINK_COMP_NAMES) $(MODULE_NAME)
 endif
 endif # BUILD_STATIC_LIBS
 else  # !IS_COMPONENT
-	$(PERL) -I$(MOZILLA_DIR)/config $(MOZILLA_DIR)/config/build-list.pl $(FINAL_LINK_LIBS) $(STATIC_LIBRARY_NAME)
+	$(PYTHON) $(MOZILLA_DIR)/config/buildlist.py $(FINAL_LINK_LIBS) $(STATIC_LIBRARY_NAME)
 endif # IS_COMPONENT
 endif # EXPORT_LIBRARY
 endif # LIBRARY_NAME
@@ -881,6 +890,7 @@ ifdef SHARED_LIBRARY
 ifdef IS_COMPONENT
 	$(INSTALL) $(IFLAGS2) $(SHARED_LIBRARY) $(FINAL_TARGET)/components
 	$(ELF_DYNSTR_GC) $(FINAL_TARGET)/components/$(SHARED_LIBRARY)
+	@$(PYTHON) $(MOZILLA_DIR)/config/buildlist.py $(FINAL_TARGET)/components/components.list $(SHARED_LIBRARY)
 ifdef BEOS_ADDON_WORKAROUND
 	( cd $(FINAL_TARGET)/components && $(CC) -nostart -o $(SHARED_LIBRARY).stub $(SHARED_LIBRARY) )
 endif
@@ -1219,7 +1229,7 @@ ifndef XP_MACOSX
 ifdef DTRACE_PROBE_OBJ
 ifndef DTRACE_LIB_DEPENDENT
 $(DTRACE_PROBE_OBJ): $(OBJS)
-	dtrace -G -C -32 -s $(MOZILLA_DTRACE_SRC) -o $(DTRACE_PROBE_OBJ) $(OBJS)
+	dtrace -G -C -s $(MOZILLA_DTRACE_SRC) -o $(DTRACE_PROBE_OBJ) $(OBJS)
 endif
 endif
 endif
@@ -1271,7 +1281,7 @@ ifdef DTRACE_LIB_DEPENDENT
 	@rm -f $(PROBE_LOBJS)
 	@for lib in $(MOZILLA_PROBE_LIBS); do $(AR_EXTRACT) $${lib}; $(CLEANUP2); done
 ifndef XP_MACOSX
-	dtrace -G -C -32 -s $(MOZILLA_DTRACE_SRC) -o  $(DTRACE_PROBE_OBJ) $(PROBE_LOBJS)
+	dtrace -G -C -s $(MOZILLA_DTRACE_SRC) -o  $(DTRACE_PROBE_OBJ) $(PROBE_LOBJS)
 endif
 	@for lib in $(MOZILLA_PROBE_LIBS); do \
 		ofiles=`$(AR_LIST) $${lib}`; \
@@ -1775,7 +1785,7 @@ $(_JAVA_GEN_DIR):
 
 $(JAVA_GEN_DIR)/.%.java.pp: %.idl $(XPIDL_COMPILE) $(_JAVA_GEN_DIR)
 	$(REPORT_BUILD)
-	$(ELOG) $(XPIDL_COMPILE) -m java -w -I$(srcdir) -I$(IDL_DIR) -o $(_JAVA_GEN_DIR)/$* $(_VPATH_SRCS)
+	$(ELOG) $(XPIDL_COMPILE) -m java -w $(XPIDL_FLAGS) -I$(srcdir) -I$(IDL_DIR) -o $(_JAVA_GEN_DIR)/$* $(_VPATH_SRCS)
 	@touch $@
 
 # "Install" generated Java interfaces.  We segregate them based on the XPI_NAME.
@@ -1801,6 +1811,7 @@ ifdef EXTRA_COMPONENTS
 libs:: $(EXTRA_COMPONENTS)
 ifndef NO_DIST_INSTALL
 	$(INSTALL) $(IFLAGS1) $^ $(FINAL_TARGET)/components
+	@$(PYTHON) $(MOZILLA_DIR)/config/buildlist.py $(FINAL_TARGET)/components/components.list $(notdir $^)
 endif
 
 endif
@@ -1811,9 +1822,11 @@ ifndef NO_DIST_INSTALL
 	$(EXIT_ON_ERROR) \
 	$(NSINSTALL) -D $(FINAL_TARGET)/components; \
 	for i in $^; do \
-	  dest=$(FINAL_TARGET)/components/`basename $$i`; \
+	  fname=`basename $$i`; \
+	  dest=$(FINAL_TARGET)/components/$${fname}; \
 	  $(RM) -f $$dest; \
 	  $(PYTHON) $(topsrcdir)/config/Preprocessor.py $(DEFINES) $(ACDEFINES) $(XULPPFLAGS) $$i > $$dest; \
+	  $(PYTHON) $(MOZILLA_DIR)/config/buildlist.py $(FINAL_TARGET)/components/components.list $$fname; \
 	done
 endif
 
@@ -2062,21 +2075,14 @@ ifneq (,$(OBJS)$(XPIDLSRCS)$(SIMPLE_PROGRAMS))
 MDDEPEND_FILES		:= $(strip $(wildcard $(MDDEPDIR)/*.pp))
 
 ifneq (,$(MDDEPEND_FILES))
-ifdef PERL
 # The script mddepend.pl checks the dependencies and writes to stdout
 # one rule to force out-of-date objects. For example,
 #   foo.o boo.o: FORCE
 # The script has an advantage over including the *.pp files directly
 # because it handles the case when header files are removed from the build.
 # 'make' would complain that there is no way to build missing headers.
-ifeq (,$(MAKE_RESTARTS))
-$(MDDEPDIR)/.all.pp: FORCE
-	@$(PERL) $(BUILD_TOOLS)/mddepend.pl $@ $(MDDEPEND_FILES)
-endif
--include $(MDDEPDIR)/.all.pp
-else
-include $(MDDEPEND_FILES)
-endif
+ALL_PP_RESULTS = $(shell $(PERL) $(BUILD_TOOLS)/mddepend.pl - $(MDDEPEND_FILES))
+$(eval $(ALL_PP_RESULTS))
 endif
 
 endif

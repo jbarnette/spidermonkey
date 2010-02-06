@@ -220,13 +220,12 @@ struct ClosureVarInfo;
                                                                                   JSTN_CONSTRUCTOR)
 #define _JS_CTYPE_REGEXP            _JS_CTYPE(JSObject *,             _JS_PTR, "","r", INFALLIBLE)
 #define _JS_CTYPE_SCOPEPROP         _JS_CTYPE(JSScopeProperty *,      _JS_PTR, --, --, INFALLIBLE)
-#define _JS_CTYPE_SIDEEXIT          _JS_CTYPE(SideExit *,             _JS_PTR, --, --, INFALLIBLE)
 #define _JS_CTYPE_INTERPSTATE       _JS_CTYPE(InterpState *,          _JS_PTR, --, --, INFALLIBLE)
 #define _JS_CTYPE_FRAGMENT          _JS_CTYPE(nanojit::Fragment *,    _JS_PTR, --, --, INFALLIBLE)
 #define _JS_CTYPE_CLASS             _JS_CTYPE(JSClass *,              _JS_PTR, --, --, INFALLIBLE)
 #define _JS_CTYPE_DOUBLEPTR         _JS_CTYPE(double *,               _JS_PTR, --, --, INFALLIBLE)
 #define _JS_CTYPE_CHARPTR           _JS_CTYPE(char *,                 _JS_PTR, --, --, INFALLIBLE)
-#define _JS_CTYPE_APNPTR            _JS_CTYPE(js_ArgsPrivateNative *, _JS_PTR, --, --, INFALLIBLE)
+#define _JS_CTYPE_APNPTR            _JS_CTYPE(ArgsPrivateNative *,    _JS_PTR, --, --, INFALLIBLE)
 #define _JS_CTYPE_CVIPTR            _JS_CTYPE(const ClosureVarInfo *, _JS_PTR, --, --, INFALLIBLE)
 #define _JS_CTYPE_FRAMEINFO         _JS_CTYPE(FrameInfo *,            _JS_PTR, --, --, INFALLIBLE)
 
@@ -442,7 +441,7 @@ js_StringToNumber(JSContext* cx, JSString* str);
 jsdouble FASTCALL
 js_BooleanOrUndefinedToNumber(JSContext* cx, int32 unboxed);
 
-/* Extern version of js_SetBuiltinError. */
+/* Extern version of SetBuiltinError. */
 extern JS_FRIEND_API(void)
 js_SetTraceableNativeFailed(JSContext *cx);
 
@@ -465,39 +464,14 @@ js_dmod(jsdouble a, jsdouble b);
 
 #endif /* !JS_TRACER */
 
-/* Defined in jsobj.cpp. */
-JS_DECLARE_CALLINFO(js_Object_tn)
-JS_DECLARE_CALLINFO(js_NewInstance)
-
 /* Defined in jsarray.cpp. */
 JS_DECLARE_CALLINFO(js_Array_dense_setelem)
 JS_DECLARE_CALLINFO(js_Array_dense_setelem_int)
 JS_DECLARE_CALLINFO(js_Array_dense_setelem_double)
 JS_DECLARE_CALLINFO(js_NewEmptyArray)
+JS_DECLARE_CALLINFO(js_NewEmptyArrayWithLength)
 JS_DECLARE_CALLINFO(js_NewArrayWithSlots)
 JS_DECLARE_CALLINFO(js_ArrayCompPush)
-
-/* Defined in jsfun.cpp. */
-JS_DECLARE_CALLINFO(js_AllocFlatClosure)
-JS_DECLARE_CALLINFO(js_PutArguments)
-
-/* Defined in jsfun.cpp. */
-JS_DECLARE_CALLINFO(js_SetCallVar)
-JS_DECLARE_CALLINFO(js_SetCallArg)
-
-/* Defined in jsnum.cpp. */
-JS_DECLARE_CALLINFO(js_NumberToString)
-
-/* Defined in jsstr.cpp. */
-JS_DECLARE_CALLINFO(js_String_tn)
-JS_DECLARE_CALLINFO(js_CompareStrings)
-JS_DECLARE_CALLINFO(js_ConcatStrings)
-JS_DECLARE_CALLINFO(js_EqualStrings)
-JS_DECLARE_CALLINFO(js_String_getelem)
-JS_DECLARE_CALLINFO(js_String_p_charCodeAt)
-JS_DECLARE_CALLINFO(js_String_p_charCodeAt0)
-JS_DECLARE_CALLINFO(js_String_p_charCodeAt0_int)
-JS_DECLARE_CALLINFO(js_String_p_charCodeAt_int)
 
 /* Defined in jsbuiltins.cpp. */
 JS_DECLARE_CALLINFO(js_BoxDouble)
@@ -509,11 +483,8 @@ JS_DECLARE_CALLINFO(js_dmod)
 JS_DECLARE_CALLINFO(js_imod)
 JS_DECLARE_CALLINFO(js_DoubleToInt32)
 JS_DECLARE_CALLINFO(js_DoubleToUint32)
-
 JS_DECLARE_CALLINFO(js_StringToNumber)
 JS_DECLARE_CALLINFO(js_StringToInt32)
-JS_DECLARE_CALLINFO(js_CloseIterator)
-JS_DECLARE_CALLINFO(js_CallTree)
 JS_DECLARE_CALLINFO(js_AddProperty)
 JS_DECLARE_CALLINFO(js_HasNamedProperty)
 JS_DECLARE_CALLINFO(js_HasNamedPropertyInt32)
@@ -521,9 +492,41 @@ JS_DECLARE_CALLINFO(js_TypeOfObject)
 JS_DECLARE_CALLINFO(js_TypeOfBoolean)
 JS_DECLARE_CALLINFO(js_BooleanOrUndefinedToNumber)
 JS_DECLARE_CALLINFO(js_BooleanOrUndefinedToString)
-JS_DECLARE_CALLINFO(js_Arguments)
 JS_DECLARE_CALLINFO(js_NewNullClosure)
-JS_DECLARE_CALLINFO(js_ConcatN)
 JS_DECLARE_CALLINFO(js_PopInterpFrame)
+JS_DECLARE_CALLINFO(js_ConcatN)
+
+/* Defined in jsfun.cpp. */
+JS_DECLARE_CALLINFO(js_AllocFlatClosure)
+JS_DECLARE_CALLINFO(js_PutArguments)
+JS_DECLARE_CALLINFO(js_PutCallObjectOnTrace)
+JS_DECLARE_CALLINFO(js_SetCallVar)
+JS_DECLARE_CALLINFO(js_SetCallArg)
+JS_DECLARE_CALLINFO(js_CloneFunctionObject)
+JS_DECLARE_CALLINFO(js_CreateCallObjectOnTrace)
+JS_DECLARE_CALLINFO(js_Arguments)
+
+/* Defined in jsiter.cpp. */
+JS_DECLARE_CALLINFO(js_CloseIterator)
+
+/* Defined in jsnum.cpp. */
+JS_DECLARE_CALLINFO(js_NumberToString)
+
+/* Defined in jsobj.cpp. */
+JS_DECLARE_CALLINFO(js_Object_tn)
+JS_DECLARE_CALLINFO(js_NewInstance)
+JS_DECLARE_CALLINFO(js_NonEmptyObject)
+
+/* Defined in jsstr.cpp. */
+JS_DECLARE_CALLINFO(js_String_tn)
+JS_DECLARE_CALLINFO(js_CompareStrings)
+JS_DECLARE_CALLINFO(js_ConcatStrings)
+JS_DECLARE_CALLINFO(js_EqualStrings)
+JS_DECLARE_CALLINFO(js_String_getelem)
+JS_DECLARE_CALLINFO(js_String_p_charCodeAt)
+JS_DECLARE_CALLINFO(js_String_p_charCodeAt0)
+JS_DECLARE_CALLINFO(js_String_p_charCodeAt0_int)
+JS_DECLARE_CALLINFO(js_String_p_charCodeAt_double_int)
+JS_DECLARE_CALLINFO(js_String_p_charCodeAt_int_int)
 
 #endif /* jsbuiltins_h___ */

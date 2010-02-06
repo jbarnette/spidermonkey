@@ -255,7 +255,7 @@ endif
 ifdef MOZ_DEBUG_SYMBOLS
 OS_CXXFLAGS += -Zi -UDEBUG -DNDEBUG
 OS_CFLAGS += -Zi -UDEBUG -DNDEBUG
-OS_LDFLAGS += -DEBUG -OPT:REF -OPT:nowin98
+OS_LDFLAGS += -DEBUG -OPT:REF
 endif
 
 ifdef MOZ_QUANTIFY
@@ -771,11 +771,6 @@ INSTALL		= $(NSINSTALL) -R
 endif # absolute_symlink
 endif # copy
 endif # WINNT/OS2
-
-ifeq (,$(filter-out WINCE,$(OS_ARCH)))
-NSINSTALL	= $(CYGWIN_WRAPPER) nsinstall
-INSTALL     = $(CYGWIN_WRAPPER) nsinstall
-endif
 
 # Use nsinstall in copy mode to install files on the system
 SYSINSTALL	= $(NSINSTALL) -t

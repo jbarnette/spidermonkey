@@ -51,7 +51,7 @@ printStatus (summary);
 var N = 100*1000;
 
 function build(N) {
-  // Explore the fact that regexp literals are shared between
+  // Exploit the fact that (in ES3), regexp literals are shared between
   // function invocations. Thus we build the following chain:
   // chainTop: function->regexp->function->regexp....->null
   // to check how GC would deal with this chain.

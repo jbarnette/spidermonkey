@@ -40,8 +40,6 @@
 #ifndef jsvector_h_
 #define jsvector_h_
 
-#include <new>
-
 #include "jstl.h"
 
 namespace js {
@@ -144,8 +142,8 @@ struct VectorImpl<T, N, AP, true>
     }
 
     static inline void copyConstructN(T *dst, size_t n, const T &t) {
-        for (T *end = dst + n; dst != end; ++dst)
-            *dst = t;
+        for (T *p = dst, *end = dst + n; p != end; ++p)
+            *p = t;
     }
 
     static inline bool growTo(Vector<T,N,AP> &v, size_t newcap) {
@@ -251,7 +249,7 @@ class Vector : AllocPolicy
 
     T *inlineEnd() const {
         JS_ASSERT(usingInlineStorage());
-        return ((T *)u.mBuf) + mLengthOrCapacity;
+        return (T *)u.mBuf + mLengthOrCapacity;
     }
 
     /* Only valid when !usingInlineStorage() */
@@ -421,10 +419,10 @@ js_AppendLiteral(Vector<T,N,AP> &v, const char (&array)[ArrayLength])
 
 /* Vector Implementation */
 
-template <class T, size_t N, class AP>
+template <class T, size_t N, class AllocPolicy>
 inline
-Vector<T,N,AP>::Vector(AP ap)
-  : AP(ap), mLengthOrCapacity(0)
+Vector<T,N,AllocPolicy>::Vector(AllocPolicy ap)
+  : AllocPolicy(ap), mLengthOrCapacity(0)
 #ifdef DEBUG
     , mEntered(false)
 #endif

@@ -267,7 +267,7 @@ GetLine(JSContext *cx, char *bufp, FILE *file, const char *prompt) {
 #endif
     {
         char line[256];
-        fprintf(gOutFile, prompt);
+        fputs(prompt, gOutFile);
         fflush(gOutFile);
         if (!fgets(line, sizeof line, file))
             return JS_FALSE;
@@ -1306,14 +1306,6 @@ FullTrustSecMan::CheckPropertyAccess(JSContext * aJSContext,
                                      JSObject * aJSObject,
                                      const char *aClassName,
                                      jsval aProperty, PRUint32 aAction)
-{
-    return NS_OK;
-}
-
-/* [noscript] void checkConnect (in JSContextPtr aJSContext, in nsIURI aTargetURI, in string aClassName, in string aProperty); */
-NS_IMETHODIMP
-FullTrustSecMan::CheckConnect(JSContext * aJSContext, nsIURI *aTargetURI,
-                              const char *aClassName, const char *aProperty)
 {
     return NS_OK;
 }

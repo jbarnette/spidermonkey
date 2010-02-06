@@ -153,6 +153,7 @@ CPPSRCS		= \
 		jsscript.cpp \
 		jsstr.cpp \
 		jstask.cpp \
+		jstypedarray.cpp \
 		jsutil.cpp \
 		jsxdrapi.cpp \
 		jsxml.cpp \
@@ -194,6 +195,7 @@ INSTALLED_HEADERS = \
 		jsmath.h \
 		jsnum.h \
 		jsobj.h \
+		jsobjinlines.h \
 		json.h \
 		jsopcode.tbl \
 		jsopcode.h \
@@ -212,8 +214,11 @@ INSTALLED_HEADERS = \
 		jsstr.h \
 		jstask.h \
 		jstracer.h \
+		jstypedarray.h \
 		jstypes.h \
 		jsutil.h \
+		jsvector.h \
+	        jstl.h \
 		jsversion.h \
 		jsxdrapi.h \
 		jsxml.h \
@@ -469,13 +474,6 @@ endif
 endif
 
 ifdef SOLARIS_SUNPRO_CXX
-# Sun Studio x86 has an optimization bug with LIR.cpp, use -xO2 instead.
-ifeq (86,$(findstring 86,$(OS_TEST)))
-LIR.o: LIR.cpp Makefile.in
-	$(REPORT_BUILD)
-	@$(MAKE_DEPS_AUTO_CXX)
-	$(CXX) -o $@ -c $(patsubst -xO%,-xO2,$(COMPILE_CFLAGS)) $<
-else
 # Sun Studio SPARC doesn't work well with gcc inline asm, use lock_SunOS_sparc*.il
 jslock.o: jslock.cpp Makefile.in lock_sparcv8plus.il lock_sparcv9.il
 	$(REPORT_BUILD)
@@ -485,7 +483,6 @@ ifeq (sparcv9,$(findstring sparcv9,$(OS_TEST)))
 else
 	$(CXX) -o $@ -c $(COMPILE_CFLAGS) $(srcdir)/lock_sparcv8plus.il $<
 endif # sparcv9
-endif # x86
 endif # SOLARIS_SUNPRO_CXX
 
 # Allow building jsinterp.c with special optimization flags
@@ -669,7 +666,34 @@ libs:: imacro_asm.js $(srcdir)/imacros.jsasm
 update-imacros: imacros.c.tmp
 	cp $< $(srcdir)/imacros.c.out
 
-.PHONY: update-imacros
+# Code for importing the nanojit subtree from its repository.
+
+NANOJIT_CENTRAL_REV=$(shell cat $(srcdir)/nanojit-import-rev)
+NANOJIT_CENTRAL_REPO=http://hg.mozilla.org/projects/nanojit-central
+NANOJIT_CENTRAL_LOCAL=$(CURDIR)/nanojit-central
+CUR_REPO=$(srcdir)/../..
+
+update-nanojit:
+	rm -Rf $(NANOJIT_CENTRAL_LOCAL) import-splicemap import-revmap
+	hg clone $(NANOJIT_CENTRAL_REPO) $(NANOJIT_CENTRAL_LOCAL)
+	python $(srcdir)/find-child.py \
+	                   --src=$(NANOJIT_CENTRAL_LOCAL) \
+	                   --dst=$(CUR_REPO) \
+	                   --start=$(NANOJIT_CENTRAL_REV) \
+	                   --filemap=$(srcdir)/nanojit-import-filemap \
+	                   >import-splicemap
+	hg convert --config convert.hg.saverev=True \
+	           --config convert.hg.startrev=`cut -d ' ' -f 1 import-splicemap` \
+	           --filemap=$(srcdir)/nanojit-import-filemap \
+	           --splicemap=import-splicemap \
+	           $(NANOJIT_CENTRAL_LOCAL) \
+	           $(CUR_REPO) \
+	           import-revmap
+	(cd $(srcdir) && hg up)
+	(cd $(NANOJIT_CENTRAL_LOCAL) && hg log -r tip --template "{node}\n") >$(srcdir)/nanojit-import-rev
+	(cd $(srcdir) && hg commit --message="Update nanojit-import-rev stamp." nanojit-import-rev)
+
+.PHONY: update-imacros update-nanojit
 endif
 endif
 endif

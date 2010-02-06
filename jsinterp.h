@@ -1,5 +1,5 @@
 /* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- * vim: set ts=8 sw=4 et tw=78:
+ * vim: set ts=4 sw=4 et tw=78:
  *
  * ***** BEGIN LICENSE BLOCK *****
  * Version: MPL 1.1/GPL 2.0/LGPL 2.1
@@ -56,6 +56,7 @@ typedef struct JSFrameRegs {
     jsval           *sp;            /* stack pointer */
 } JSFrameRegs;
 
+
 /*
  * JS stack frame, may be allocated on the C stack by native callers.  Always
  * allocated on cx->stackPool for calls from the interpreter to an interpreted
@@ -73,7 +74,6 @@ struct JSStackFrame {
     JSObject        *callobj;       /* lazily created Call object */
     jsval           argsobj;        /* lazily created arguments object, must be
                                        JSVAL_OBJECT */
-    JSObject        *varobj;        /* variables object, where vars go */
     JSScript        *script;        /* script being interpreted */
     JSFunction      *fun;           /* function being called or null */
     jsval           thisv;          /* "this" pointer if in method */
@@ -123,7 +123,6 @@ struct JSStackFrame {
     JSObject        *blockChain;
 
     uint32          flags;          /* frame flags -- see below */
-    JSStackFrame    *dormantNext;   /* next dormant frame chain */
     JSStackFrame    *displaySave;   /* previous value of display entry for
                                        script->staticLevel */
 
@@ -142,12 +141,39 @@ struct JSStackFrame {
         }
     }
 
+    jsval calleeValue() {
+        JS_ASSERT(argv);
+        return argv[-2];
+    }
+
+    JSObject *calleeObject() {
+        JS_ASSERT(argv);
+        return JSVAL_TO_OBJECT(argv[-2]);
+    }
+
     JSObject *callee() {
         return argv ? JSVAL_TO_OBJECT(argv[-2]) : NULL;
     }
+
+    /*
+     * Get the object associated with the Execution Context's
+     * VariableEnvironment (ES5 10.3). The given CallStack must contain this
+     * stack frame.
+     */
+    JSObject *varobj(js::CallStack *cs);
+
+    /* Short for: varobj(cx->activeCallStack()). */
+    JSObject *varobj(JSContext *cx);
 };
 
 #ifdef __cplusplus
+/*
+ * Perform a linear search of all frames in all callstacks in the given context
+ * for the given frame, returning the callstack, if found, and NULL otherwise.
+ */
+extern js::CallStack *
+js_ContainingCallStack(JSContext *cx, JSStackFrame *target);
+
 static JS_INLINE uintN
 FramePCOffset(JSStackFrame* fp)
 {
@@ -171,13 +197,8 @@ JSStackFrame::assertValidStackDepth(uintN depth)
 static JS_INLINE uintN
 GlobalVarCount(JSStackFrame *fp)
 {
-    uintN n;
-
     JS_ASSERT(!fp->fun);
-    n = fp->script->nfixed;
-    if (fp->script->regexpsOffset != 0)
-        n -= fp->script->regexps()->length;
-    return n;
+    return fp->script->nfixed;
 }
 
 typedef struct JSInlineFrame {
@@ -303,8 +324,6 @@ typedef struct JSPropertyCache {
     uint32              addpchits;      /* adding next property pchit case */
     uint32              setpchits;      /* setting existing property pchit */
     uint32              setpcmisses;    /* setting/adding property pc misses */
-    uint32              slotchanges;    /* clasp->reserveSlots result variance-
-                                           induced slot changes */
     uint32              setmisses;      /* JSOP_SET{NAME,PROP} total misses */
     uint32              idmisses;       /* slow-path key id == atom misses */
     uint32              komisses;       /* slow-path key object misses */
@@ -586,6 +605,8 @@ js_GetUpvar(JSContext *cx, uintN level, uintN cookie);
 #  define JS_LONE_INTERPRET 1
 # endif
 #endif
+
+#define JS_MAX_INLINE_CALL_COUNT 3000
 
 #if !JS_LONE_INTERPRET
 # define JS_STATIC_INTERPRET    static

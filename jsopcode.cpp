@@ -277,7 +277,7 @@ ToDisassemblySource(JSContext *cx, jsval v)
 
         if (clasp == &js_BlockClass) {
             char *source = JS_sprintf_append(NULL, "depth %d {", OBJ_BLOCK_DEPTH(cx, obj));
-            for (JSScopeProperty *sprop = OBJ_SCOPE(obj)->lastProp;
+            for (JSScopeProperty *sprop = OBJ_SCOPE(obj)->lastProperty();
                  sprop;
                  sprop = sprop->parent) {
                 const char *bytes = js_AtomToPrintableString(cx, JSID_TO_ATOM(sprop->id));
@@ -724,8 +724,9 @@ struct JSPrinter {
     Sprinter        sprinter;       /* base class state */
     JSArenaPool     pool;           /* string allocation pool */
     uintN           indent;         /* indentation in spaces */
-    JSPackedBool    pretty;         /* pretty-print: indent, use newlines */
-    JSPackedBool    grouped;        /* in parenthesized expression context */
+    bool            pretty;         /* pretty-print: indent, use newlines */
+    bool            grouped;        /* in parenthesized expression context */
+    bool            strict;         /* in code marked strict */
     JSScript        *script;        /* script being printed */
     jsbytecode      *dvgfence;      /* DecompileExpression fencepost */
     jsbytecode      **pcstack;      /* DecompileExpression modeled stack */
@@ -733,17 +734,9 @@ struct JSPrinter {
     jsuword         *localNames;    /* argument and variable names */
 };
 
-/*
- * Hack another flag, a la JS_DONT_PRETTY_PRINT, into uintN indent parameters
- * to functions such as js_DecompileFunction and js_NewPrinter.  This time, as
- * opposed to JS_DONT_PRETTY_PRINT back in the dark ages, we can assume that a
- * uintN is at least 32 bits.
- */
-#define JS_IN_GROUP_CONTEXT 0x10000
-
 JSPrinter *
-JS_NEW_PRINTER(JSContext *cx, const char *name, JSFunction *fun,
-               uintN indent, JSBool pretty)
+js_NewPrinter(JSContext *cx, const char *name, JSFunction *fun,
+              uintN indent, JSBool pretty, JSBool grouped, JSBool strict)
 {
     JSPrinter *jp;
 
@@ -751,10 +744,11 @@ JS_NEW_PRINTER(JSContext *cx, const char *name, JSFunction *fun,
     if (!jp)
         return NULL;
     INIT_SPRINTER(cx, &jp->sprinter, &jp->pool, 0);
-    JS_INIT_ARENA_POOL(&jp->pool, name, 256, 1, &cx->scriptStackQuota);
-    jp->indent = indent & ~JS_IN_GROUP_CONTEXT;
+    JS_InitArenaPool(&jp->pool, name, 256, 1, &cx->scriptStackQuota);
+    jp->indent = indent;
     jp->pretty = pretty;
-    jp->grouped = (indent & JS_IN_GROUP_CONTEXT) != 0;
+    jp->grouped = grouped;
+    jp->strict = strict;
     jp->script = NULL;
     jp->dvgfence = NULL;
     jp->pcstack = NULL;
@@ -825,16 +819,20 @@ js_printf(JSPrinter *jp, const char *format, ...)
     /* If pretty-printing, expand magic tab into a run of jp->indent spaces. */
     if (*format == '\t') {
         format++;
-        if (jp->pretty && Sprint(&jp->sprinter, "%*s", jp->indent, "") < 0)
+        if (jp->pretty && Sprint(&jp->sprinter, "%*s", jp->indent, "") < 0) {
+            va_end(ap);
             return -1;
+        }
     }
 
     /* Suppress newlines (must be once per format, at the end) if not pretty. */
     fp = NULL;
     if (!jp->pretty && format[cc = strlen(format) - 1] == '\n') {
         fp = JS_strdup(jp->sprinter.context, format);
-        if (!fp)
+        if (!fp) {
+            va_end(ap);
             return -1;
+        }
         fp[cc] = '\0';
         format = fp;
     }
@@ -847,6 +845,7 @@ js_printf(JSPrinter *jp, const char *format, ...)
     }
     if (!bp) {
         JS_ReportOutOfMemory(jp->sprinter.context);
+        va_end(ap);
         return -1;
     }
 
@@ -1317,7 +1316,7 @@ GetLocal(SprintStack *ss, jsint i)
     }
 
     i -= depth;
-    for (sprop = OBJ_SCOPE(obj)->lastProp; sprop; sprop = sprop->parent) {
+    for (sprop = OBJ_SCOPE(obj)->lastProperty(); sprop; sprop = sprop->parent) {
         if (sprop->shortid == i)
             break;
     }
@@ -2251,8 +2250,9 @@ Decompile(SprintStack *ss, jsbytecode *pc, intN nb, JSOp nextop)
                     fun = jp->script->getFunction(js_GetSrcNoteOffset(sn, 0));
                   do_function:
                     js_puts(jp, "\n");
-                    jp2 = JS_NEW_PRINTER(cx, "nested_function", fun,
-                                         jp->indent, jp->pretty);
+                    jp2 = js_NewPrinter(cx, "nested_function", fun,
+                                        jp->indent, jp->pretty, jp->grouped,
+                                        jp->strict);
                     if (!jp2)
                         return NULL;
                     ok = js_DecompileFunction(jp2);
@@ -2525,8 +2525,13 @@ Decompile(SprintStack *ss, jsbytecode *pc, intN nb, JSOp nextop)
                     break;
 
                   case SRC_HIDDEN:
-                    /* Hide this pop, it's from a goto in a with or for/in. */
+                    /*
+                     * Hide this pop. Don't adjust our stack depth model if
+                     * it's from a goto in a with or for/in.
+                     */
                     todo = -2;
+                    if (lastop == JSOP_UNBRAND)
+                        (void) POP_STR();
                     break;
 
                   case SRC_DECL:
@@ -2634,7 +2639,7 @@ Decompile(SprintStack *ss, jsbytecode *pc, intN nb, JSOp nextop)
                 MUST_FLOW_THROUGH("enterblock_out");
 #define LOCAL_ASSERT_OUT(expr) LOCAL_ASSERT_CUSTOM(expr, ok = JS_FALSE; \
                                                    goto enterblock_out)
-                for (sprop = OBJ_SCOPE(obj)->lastProp; sprop;
+                for (sprop = OBJ_SCOPE(obj)->lastProperty(); sprop;
                      sprop = sprop->parent) {
                     if (!(sprop->flags & SPROP_HAS_SHORTID))
                         continue;
@@ -3555,6 +3560,15 @@ Decompile(SprintStack *ss, jsbytecode *pc, intN nb, JSOp nextop)
                         goto out;
                 }
 
+                /*
+                 * The only way that our next op could be a JSOP_ADD is
+                 * if we are about to concatenate at least one non-string
+                 * literal. Deal with that here in order to avoid extra
+                 * parentheses (because JSOP_ADD is left-associative).
+                 */
+                if (pc[len] == JSOP_ADD)
+                    saveop = JSOP_NOP;
+
                 ok = JS_TRUE;
 
               out:
@@ -4145,17 +4159,17 @@ Decompile(SprintStack *ss, jsbytecode *pc, intN nb, JSOp nextop)
 
                 LOAD_FUNCTION(0);
                 {
-                    uintN indent = JS_DONT_PRETTY_PRINT;
-
                     /*
                      * Always parenthesize expression closures. We can't force
                      * saveop to a low-precedence op to arrange for auto-magic
                      * parenthesization without confusing getter/setter code
                      * that checks for JSOP_LAMBDA.
                      */
-                    if (!(fun->flags & JSFUN_EXPR_CLOSURE))
-                        indent |= JS_IN_GROUP_CONTEXT;
-                    str = JS_DecompileFunction(cx, fun, indent);
+                    bool grouped = !(fun->flags & JSFUN_EXPR_CLOSURE);
+                    bool strict = jp->script->strictModeCode;
+                    str = js_DecompileToString(cx, "lambda", fun, 0, 
+                                               false, grouped, strict,
+                                               js_DecompileFunction);
                     if (!str)
                         return NULL;
                 }
@@ -4909,6 +4923,25 @@ js_DecompileScript(JSPrinter *jp, JSScript *script)
     return DecompileCode(jp, script, script->code, (uintN)script->length, 0);
 }
 
+JSString *
+js_DecompileToString(JSContext *cx, const char *name, JSFunction *fun,
+                     uintN indent, JSBool pretty, JSBool grouped, JSBool strict,
+                     JSDecompilerPtr decompiler)
+{
+    JSPrinter *jp;
+    JSString *str;
+
+    jp = js_NewPrinter(cx, name, fun, indent, pretty, grouped, strict);
+    if (!jp)
+        return NULL;
+    if (decompiler(jp))
+        str = js_GetPrinterOutput(jp);
+    else
+        str = NULL;
+    js_DestroyPrinter(jp);
+    return str;
+}
+
 static const char native_code_str[] = "\t[native code]\n";
 
 JSBool
@@ -4969,25 +5002,34 @@ js_DecompileFunction(JSPrinter *jp)
         jp->indent -= 4;
         js_printf(jp, "\t}");
     } else {
+        JSScript *script = fun->u.i.script;
 #if JS_HAS_DESTRUCTURING
         SprintStack ss;
         void *mark;
 #endif
 
         /* Print the parameters. */
-        pc = fun->u.i.script->main;
-        endpc = pc + fun->u.i.script->length;
+        pc = script->main;
+        endpc = pc + script->length;
         ok = JS_TRUE;
 
-#if JS_HAS_DESTRUCTURING
         /* Skip trace hint if it appears here. */
-        if (js_GetOpcode(jp->sprinter.context, fun->u.i.script, pc) == JSOP_TRACE) {
-            JS_STATIC_ASSERT(JSOP_TRACE_LENGTH == JSOP_NOP_LENGTH);
-            pc += JSOP_TRACE_LENGTH;
+#if JS_HAS_GENERATORS
+        if (js_GetOpcode(jp->sprinter.context, script, script->code) != JSOP_GENERATOR)
+#endif
+        {
+            JSOp op = js_GetOpcode(jp->sprinter.context, script, pc);
+            if (op == JSOP_TRACE || op == JSOP_NOP) {
+                JS_STATIC_ASSERT(JSOP_TRACE_LENGTH == JSOP_NOP_LENGTH);
+                pc += JSOP_TRACE_LENGTH;
+            } else {
+                JS_ASSERT(op == JSOP_STOP);  /* empty script singleton */
+            }
         }
 
+#if JS_HAS_DESTRUCTURING
         ss.printer = NULL;
-        jp->script = fun->u.i.script;
+        jp->script = script;
         mark = JS_ARENA_MARK(&jp->sprinter.context->tempPool);
 #endif
 
@@ -5008,8 +5050,7 @@ js_DecompileFunction(JSPrinter *jp)
                 pc += JSOP_GETARG_LENGTH;
                 LOCAL_ASSERT(*pc == JSOP_DUP);
                 if (!ss.printer) {
-                    ok = InitSprintStack(jp->sprinter.context, &ss, jp,
-                                         StackDepth(fun->u.i.script));
+                    ok = InitSprintStack(jp->sprinter.context, &ss, jp, StackDepth(script));
                     if (!ok)
                         break;
                 }
@@ -5046,13 +5087,26 @@ js_DecompileFunction(JSPrinter *jp)
             return JS_FALSE;
         if (fun->flags & JSFUN_EXPR_CLOSURE) {
             js_printf(jp, ") ");
+            if (fun->u.i.script->strictModeCode && !jp->strict) {
+                /*
+                 * We have no syntax for strict function expressions;
+                 * at least give a hint.
+                 */
+                js_printf(jp, "\t/* use strict */ \n");
+                jp->strict = true;
+            }
+            
         } else {
             js_printf(jp, ") {\n");
             jp->indent += 4;
+            if (fun->u.i.script->strictModeCode && !jp->strict) {
+                js_printf(jp, "\t'use strict';\n");
+                jp->strict = true;
+            }
         }
 
-        len = fun->u.i.script->code + fun->u.i.script->length - pc;
-        ok = DecompileCode(jp, fun->u.i.script, pc, (uintN)len, 0);
+        len = script->code + script->length - pc;
+        ok = DecompileCode(jp, script, pc, (uintN)len, 0);
         if (!ok)
             return JS_FALSE;
 
@@ -5295,7 +5349,8 @@ DecompileExpression(JSContext *cx, JSScript *script, JSFunction *fun,
     }
 
     name = NULL;
-    jp = JS_NEW_PRINTER(cx, "js_DecompileValueGenerator", fun, 0, JS_FALSE);
+    jp = js_NewPrinter(cx, "js_DecompileValueGenerator", fun, 0,
+                       false, false, false);
     if (jp) {
         jp->dvgfence = end;
         jp->pcstack = pcstack;
@@ -5528,8 +5583,14 @@ ReconstructPCStack(JSContext *cx, JSScript *script, jsbytecode *target,
             }
         }
 
-        if (sn && SN_TYPE(sn) == SRC_HIDDEN)
+        /*
+         * Ignore early-exit code, which is SRC_HIDDEN, but do not ignore the
+         * hidden POP that sometimes appears after an UNBRAND. See bug 543565.
+         */
+        if (sn && SN_TYPE(sn) == SRC_HIDDEN &&
+            (op != JSOP_POP || js_GetOpcode(cx, script, pc - 1) != JSOP_UNBRAND)) {
             continue;
+        }
 
         if (SimulateOp(cx, script, op, cs, pc, pcstack, pcdepth) < 0)
             return -1;

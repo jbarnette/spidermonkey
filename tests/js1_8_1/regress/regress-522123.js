@@ -16,10 +16,10 @@
  *
  * The Initial Developer of the Original Code is
  * Mozilla Foundation.
- * Portions created by the Initial Developer are Copyright (C) 2008
+ * Portions created by the Initial Developer are Copyright (C) 2007
  * the Initial Developer. All Rights Reserved.
  *
- * Contributor(s): Norris Boyd
+ * Contributor(s): Jim Blandy
  *
  * Alternatively, the contents of this file may be used under the terms of
  * either the GNU General Public License Version 2 or later (the "GPL"), or
@@ -35,16 +35,17 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
-var gTestfile = 'regress-478047.js';
+var gTestfile = 'regress-522123.js';
 //-----------------------------------------------------------------------------
-var BUGNUMBER = 478047;
-var summary = 'Assign to property with getter but no setter should throw ' +
-  'TypeError';
+var BUGNUMBER = 522123;
+var summary = 'Indirect eval confuses scope chain';
 var actual = '';
 var expect = '';
 
 
 //-----------------------------------------------------------------------------
+var x=1;
+
 test();
 //-----------------------------------------------------------------------------
 
@@ -53,35 +54,17 @@ function test()
   enterFunc ('test');
   printBugNumber(BUGNUMBER);
   printStatus (summary);
+ 
+  expect = 1;
 
-  expect = 'TypeError: setting a property that has only a getter';
-  try
-  { 
-    var o = { get p() { return "a"; } };
-    o.p = "b";
-  }
-  catch(ex)
-  {
-    actual = ex + '';
-  }
-  reportCompare(expect, actual, summary);
-
-
-  actual = '';
-  try
-  {
-    o = { get p() { return "a"; } };
-    T = (function () {});
-    T.prototype = o;
-    y = new T();
-    y.p = "b";
-  }
-  catch(ex)
-  {
-    actual = ex + '';
-  }
+  evil=eval;
+  let (x=2) {
+    actual = evil("x");
+  };
 
   reportCompare(expect, actual, summary);
 
   exitFunc ('test');
 }
+
+reportCompare(true, true);

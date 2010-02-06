@@ -76,6 +76,7 @@ byteswap.h
 #define WRAP_CAIRO_HEADERS
 #endif
 #ifdef WRAP_CAIRO_HEADERS
+pixman.h
 cairo.h
 cairo-atsui.h
 cairo-beos.h
@@ -555,7 +556,6 @@ pango/pango-break.h
 pango/pango-fontmap.h
 pango/pango.h
 pango/pangoxft.h
-pango/pangox.h
 pango/pango-utils.h
 pango-types.h
 pascal.h
@@ -1012,10 +1012,17 @@ bzlib.h
 #ifdef MOZ_PLATFORM_HILDON
 hildon-uri.h
 hildon-mime.h
+hildon-file-chooser-dialog.h
 #endif
 #ifdef NS_OSSO
 libosso.h
+osso-mem.h
 #endif
 #ifdef MOZ_ENABLE_GIO
 gio/gio.h
+#endif
+#ifdef MOZ_ENABLE_LIBCONIC
+conic/conicconnection.h
+conic/conicconnectionevent.h
+conic/conicstatisticsevent.h
 #endif

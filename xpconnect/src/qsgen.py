@@ -192,34 +192,14 @@ def loadIDL(parser, includePath, filename):
     idl.resolve(includePath, parser)
     return idl
 
+def removeStubMember(memberId, member):
+    if member not in member.iface.stubMembers:
+        raise UserError("Trying to remove member %s from interface %s, but it was never added"
+                        % (member.name, member.iface.name))
+    member.iface.stubMembers.remove(member)
+
 def addStubMember(memberId, member, traceable):
-    # Check that the member is ok.
     mayTrace = False
-    if member.kind not in ('method', 'attribute'):
-        raise UserError("Member %s is %r, not a method or attribute."
-                        % (memberId, member.kind))
-    if member.noscript:
-        raise UserError("%s %s is noscript."
-                        % (member.kind.capitalize(), memberId))
-    if member.notxpcom:
-        raise UserError(
-            "%s %s: notxpcom methods are not supported."
-            % (member.kind.capitalize(), memberId))
-
-    if (member.kind == 'attribute'
-          and not member.readonly
-          and isSpecificInterfaceType(member.realtype, 'nsIVariant')):
-        raise UserError(
-            "Attribute %s: Non-readonly attributes of type nsIVariant "
-            "are not supported."
-            % memberId)
-
-    # Check for unknown properties.
-    for attrname, value in vars(member).items():
-        if value is True and attrname not in ('readonly',):
-            raise UserError("%s %s: unrecognized property %r"
-                            % (member.kind.capitalize(), memberId,
-                               attrname))
     if member.kind == 'method':
         if len(member.params) <= 3:
             mayTrace = True
@@ -241,6 +221,34 @@ def addStubMember(memberId, member, traceable):
 
     # Add this member to the list.
     member.iface.stubMembers.append(member)
+
+def checkStubMember(member):
+    memberId = member.iface.name + "." + member.name
+    if member.kind not in ('method', 'attribute'):
+        raise UserError("Member %s is %r, not a method or attribute."
+                        % (memberId, member.kind))
+    if member.noscript:
+        raise UserError("%s %s is noscript."
+                        % (member.kind.capitalize(), memberId))
+    if member.notxpcom:
+        raise UserError(
+            "%s %s: notxpcom methods are not supported."
+            % (member.kind.capitalize(), memberId))
+
+    if (member.kind == 'attribute'
+          and not member.readonly
+          and isSpecificInterfaceType(member.realtype, 'nsIVariant')):
+        raise UserError(
+            "Attribute %s: Non-readonly attributes of type nsIVariant "
+            "are not supported."
+            % memberId)
+
+    # Check for unknown properties.
+    for attrname, value in vars(member).items():
+        if value is True and attrname not in ('readonly','optional_argc','traceable'):
+            raise UserError("%s %s: unrecognized property %r"
+                            % (member.kind.capitalize(), memberId,
+                               attrname))
 
 def parseMemberId(memberId):
     """ Split the geven member id into its parts. """
@@ -264,6 +272,8 @@ class Configuration:
         # optional settings
         self.irregularFilenames = config.get('irregularFilenames', {})
         self.customIncludes = config.get('customIncludes', [])
+        self.customQuickStubs = config.get('customQuickStubs', [])
+        self.customReturnInterfaces = config.get('customReturnInterfaces', [])
         self.customMethodCalls = config.get('customMethodCalls', {})
 
 def readConfigFile(filename, includePath, cachedir, traceable):
@@ -292,8 +302,17 @@ def readConfigFile(filename, includePath, cachedir, traceable):
             interfacesByName[interfaceName] = iface
         return iface
 
+    stubbedInterfaces = []
+
     for memberId in conf.members:
+        add = True
         interfaceName, memberName = parseMemberId(memberId)
+
+        # If the interfaceName starts with -, then remove this entry from the list
+        if interfaceName[0] == '-':
+            add = False
+            interfaceName = interfaceName[1:]
+
         iface = getInterface(interfaceName, errorLoc='looking for %r' % memberId)
 
         if not iface.attributes.scriptable:
@@ -301,11 +320,20 @@ def readConfigFile(filename, includePath, cachedir, traceable):
                             "IDL file: %r." % (interfaceName, idlFile))
 
         if memberName == '*':
+            if not add:
+                raise UserError("Can't use negation in stub list with wildcard, in %s.*" % interfaceName)
+
             # Stub all scriptable members of this interface.
             for member in iface.members:
                 if member.kind in ('method', 'attribute') and not member.noscript:
+                    cmc = conf.customMethodCalls.get(interfaceName + "_" + header.methodNativeName(member), None)
+                    mayTrace = cmc is None or cmc.get('traceable', True)
+
                     addStubMember(iface.name + '.' + member.name, member,
-                                  traceable)
+                                  traceable and mayTrace)
+
+                    if member.iface not in stubbedInterfaces:
+                        stubbedInterfaces.append(member.iface)
         else:
             # Look up a member by name.
             if memberName not in iface.namemap:
@@ -314,10 +342,28 @@ def readConfigFile(filename, includePath, cachedir, traceable):
                                 "(See IDL file %r.)"
                                 % (interfaceName, memberName, idlFile))
             member = iface.namemap.get(memberName, None)
-            if member in iface.stubMembers:
-                raise UserError("Member %s is specified more than once."
-                                % memberId)
-            addStubMember(memberId, member, traceable)
+            if add:
+                if member in iface.stubMembers:
+                    raise UserError("Member %s is specified more than once."
+                                    % memberId)
+
+                cmc = conf.customMethodCalls.get(interfaceName + "_" + header.methodNativeName(member), None)
+                mayTrace = cmc is None or cmc.get('traceable', True)
+
+                addStubMember(memberId, member, traceable and mayTrace)
+                if member.iface not in stubbedInterfaces:
+                    stubbedInterfaces.append(member.iface)
+            else:
+                removeStubMember(memberId, member)
+
+    # Now go through and check all the interfaces' members
+    for iface in stubbedInterfaces:
+        for member in iface.stubMembers:
+            checkStubMember(member)
+
+    for iface in conf.customReturnInterfaces:
+        # just ensure that it exists so that we can grab it later
+        iface = getInterface(iface, errorLoc='looking for %s' % (iface,))
 
     return conf, interfaces
 
@@ -356,6 +402,12 @@ def substitute(template, vals):
 
 # From JSData2Native.
 argumentUnboxingTemplates = {
+    'octet':
+        "    uint32 ${name}_u32;\n"
+        "    if (!JS_ValueToECMAUint32(cx, ${argVal}, &${name}_u32))\n"
+        "        return JS_FALSE;\n"
+        "    uint8 ${name} = (uint8) ${name}_u32;\n",
+
     'short':
         "    int32 ${name}_i32;\n"
         "    if (!JS_ValueToECMAInt32(cx, ${argVal}, &${name}_i32))\n"
@@ -550,6 +602,10 @@ resultConvTemplates = {
             "    ${jsvalRef} = JSVAL_VOID;\n"
             "    return JS_TRUE;\n",
 
+    'octet':
+        "    ${jsvalRef} = INT_TO_JSVAL((int32) result);\n"
+        "    return JS_TRUE;\n",
+
     'short':
         "    ${jsvalRef} = INT_TO_JSVAL((int32) result);\n"
         "    return JS_TRUE;\n",
@@ -708,6 +764,8 @@ def writeQuickStub(f, customMethodCalls, member, stubName, isSetter=False):
                 code = customMethodCall['setter_code']
             stubName = templateName
     else:
+        if customMethodCall.get('skipgen', False):
+            return
         callTemplate = ""
         code = customMethodCall['code']
 
@@ -836,6 +894,8 @@ def writeQuickStub(f, customMethodCalls, member, stubName, isSetter=False):
         if isMethod:
             comName = header.methodNativeName(member)
             argv = ['arg' + str(i) for i, p in enumerate(member.params)]
+            if member.optional_argc:
+                argv.append('argc - %d' % requiredArgs)
             if not isVoidType(member.realtype):
                 argv.append(outParamForm(resultname, member.realtype))
             args = ', '.join(argv)
@@ -890,7 +950,9 @@ def writeQuickStub(f, customMethodCalls, member, stubName, isSetter=False):
     if customMethodCall is not None:
         f.write(callTemplate)
 
-traceTypeMap = {
+# Only these types can be returned (note: no strings);
+# if the type isn't one of these, then traceTypeMap['_default'] is used
+traceReturnTypeMap = {
     'void':
         ["jsval ", "JSVAL", "JSVAL_VOID"],
     'boolean':
@@ -907,8 +969,12 @@ traceTypeMap = {
         ["jsdouble ", "DOUBLE", "0"],
     'double':
         ["jsdouble ", "DOUBLE", "0"],
+    }
 
-    # XXX STRING_FAIL can't return a null'd string, ask jorendorff, maybe a JSVAL_FAIL
+# This list extends the above list, but includes types that
+# are valid for arguments only, namely strings.  It also
+# includes the default jsval type.
+traceTypeMap = {
     '[astring]':
         ["JSString *", "STRING", "nsnull"],
     '[domstring]':
@@ -925,16 +991,31 @@ traceTypeMap = {
     }
 
 def getTraceType(type):
-    traceType = traceTypeMap.get(type) or traceTypeMap.get("_default")
+    type = getBuiltinOrNativeTypeName(type)
+    traceType = traceReturnTypeMap.get(type) or traceTypeMap.get(type) or traceTypeMap.get("_default")
+    assert traceType
+    return traceType[0]
+
+def getTraceReturnType(type):
+    type = getBuiltinOrNativeTypeName(type)
+    traceType = traceReturnTypeMap.get(type) or traceTypeMap.get("_default")
     assert traceType
     return traceType[0]
 
 def getTraceInfoType(type):
-    traceType = traceTypeMap.get(type) or traceTypeMap.get("_default")
+    type = getBuiltinOrNativeTypeName(type)
+    traceType = traceReturnTypeMap.get(type) or traceTypeMap.get(type) or traceTypeMap.get("_default")
+    assert traceType
+    return traceType[1]
+
+def getTraceInfoReturnType(type):
+    type = getBuiltinOrNativeTypeName(type)
+    traceType = traceReturnTypeMap.get(type) or traceTypeMap.get("_default")
     assert traceType
     return traceType[1]
 
 def getTraceInfoDefaultReturn(type):
+    type = getBuiltinOrNativeTypeName(type)
     traceType = traceTypeMap.get(type) or traceTypeMap.get("_default")
     assert traceType
     return traceType[2]
@@ -953,6 +1034,8 @@ def writeFailure(f, retval, indent):
     f.write(getFailureString(retval, indent))
 
 traceableArgumentConversionTemplates = {
+    'octet':
+          "    PRUint8 ${name} = (PRUint8) ${argVal};\n",
     'short':
           "    PRint16 ${name} = (PRint16) ${argVal};\n",
     'unsigned short':
@@ -1009,7 +1092,7 @@ def writeTraceableArgumentConversion(f, member, i, name, type, haveCcx,
                 "XPCVariant::newVariant(ccx, ${argVal})));\n"
                 "    if (!${name}) {\n")
             f.write(substitute(template, params))
-            writeFailure(f, getTraceInfoDefaultReturn(member.type), 2)
+            writeFailure(f, getTraceInfoDefaultReturn(member.realtype), 2)
             return rvdeclared
         elif type.name == 'nsIAtom':
             # Should have special atomizing behavior.  Fall through.
@@ -1030,17 +1113,19 @@ def writeTraceableArgumentConversion(f, member, i, name, type, haveCcx,
                 f.write("        xpc_qsThrowBadArgWithDetails(cx, rv, %d, "
                         "\"%s\", \"%s\");\n"
                         % (i, member.iface.name, member.name))
-            writeFailure(f, getTraceInfoDefaultReturn(member.type), 2)
+            writeFailure(f, getTraceInfoDefaultReturn(member.realtype), 2)
             return True
 
     print member
-    warn("Unable to unbox argument of type %s" % type.name)
+    warn("Unable to unbox argument of type %s (for traceable arg)" % type.name)
     f.write("    !; // TODO - Unbox argument %s = arg%d\n" % (name, i))
     return rvdeclared
 
 traceableResultConvTemplates = {
     'void':
         "    return JSVAL_VOID;\n",
+    'octet':
+        "    return uint32(result);\n",
     'short':
         "    return int32(result);\n",
     'unsigned short':
@@ -1051,6 +1136,10 @@ traceableResultConvTemplates = {
         "    return uint32(result);\n",
     'boolean':
         "    return result ? JS_TRUE : JS_FALSE;\n",
+    'float':
+        "    return jsdouble(result);\n",
+    'double':
+        "    return jsdouble(result);\n",
     '[domstring]':
         "    jsval rval;\n"
         "    if (!xpc_qsStringToJsval(cx, result, &rval)) {\n"
@@ -1095,7 +1184,7 @@ def writeTraceableQuickStub(f, customMethodCalls, member, stubName):
     assert member.traceable
 
     traceInfo = {
-        'type': getTraceInfoType(member.type) + "_FAIL",
+        'type': getTraceInfoReturnType(member.realtype) + "_FAIL",
         'params': ["CONTEXT", "THIS"]
         }
 
@@ -1103,16 +1192,18 @@ def writeTraceableQuickStub(f, customMethodCalls, member, stubName):
 
     customMethodCall = customMethodCalls.get(stubName, None)
 
+    if customMethodCall is not None and customMethodCall.get('skipgen', False):
+        return
+
     # Write the function
-    f.write("static %sFASTCALL\n" % getTraceType(member.type))
+    f.write("static %sFASTCALL\n" % getTraceReturnType(member.realtype))
     f.write("%s(JSContext *cx, JSObject *obj" % (stubName + "_tn"))
     if haveCcx or isInterfaceType(member.realtype):
         f.write(", JSObject *callee")
         traceInfo["params"].append("CALLEE")
     for i, param in enumerate(member.params):
-        type = getBuiltinOrNativeTypeName(param.realtype)
-        f.write(", %s_arg%d" % (getTraceType(type), i))
-        traceInfo["params"].append(getTraceInfoType(type))
+        f.write(", %s_arg%d" % (getTraceType(param.realtype), i))
+        traceInfo["params"].append(getTraceInfoType(param.realtype))
     f.write(")\n{\n");
     f.write("    XPC_QS_ASSERT_CONTEXT_OK(cx);\n")
 
@@ -1139,7 +1230,7 @@ def writeTraceableQuickStub(f, customMethodCalls, member, stubName):
     else:
         f.write("    if (!xpc_qsUnwrapThis(cx, obj, nsnull, &self, &selfref.ptr, "
                 "&vp.array[0], nsnull)) {\n")
-    writeFailure(f, getTraceInfoDefaultReturn(member.type), 2)
+    writeFailure(f, getTraceInfoDefaultReturn(member.realtype), 2)
 
     argNames = []
 
@@ -1186,7 +1277,7 @@ def writeTraceableQuickStub(f, customMethodCalls, member, stubName):
             # XXX Replace with a real error message!
             f.write("        xpc_qsThrowMethodFailedWithDetails(cx, rv, "
                     "\"%s\", \"%s\");\n" % (member.iface.name, member.name))
-        writeFailure(f, getTraceInfoDefaultReturn(member.type), 2)
+        writeFailure(f, getTraceInfoDefaultReturn(member.realtype), 2)
 
     # Convert the return value.
     writeTraceableResultConv(f, member.realtype)
@@ -1456,13 +1547,16 @@ def writeStubFile(filename, headerFilename, conf, interfaces):
     try:
         f.write(stubTopTemplate % os.path.basename(headerFilename))
         N = 256
-        for customInclude in conf.customIncludes:
-            f.write('#include "%s"\n' % customInclude)
         resulttypes = []
         for iface in interfaces:
             resulttypes.extend(writeIncludesForInterface(iface))
+        resulttypes.extend(conf.customReturnInterfaces)
+        for customInclude in conf.customIncludes:
+            f.write('#include "%s"\n' % customInclude)
         f.write("\n\n")
         writeResultXPCInterfacesArray(f, conf, frozenset(resulttypes))
+        for customQS in conf.customQuickStubs:
+            f.write('#include "%s"\n' % customQS)
         for iface in interfaces:
             writeStubsForInterface(f, conf.customMethodCalls, iface)
         writeDefiner(f, conf, interfaces)

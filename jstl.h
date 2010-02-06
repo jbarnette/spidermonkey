@@ -42,6 +42,8 @@
 
 #include "jsbit.h"
 
+#include <new>
+
 namespace js {
 
 /* JavaScript Template Library. */
@@ -192,7 +194,7 @@ class ReentrancyGuard
  * Round x up to the nearest power of 2.  This function assumes that the most
  * significant bit of x is not set, which would lead to overflow.
  */
-static JS_ALWAYS_INLINE size_t
+JS_ALWAYS_INLINE size_t
 RoundUpPow2(size_t x)
 {
     typedef tl::StaticAssert<tl::IsSameType<size_t,JSUword>::result>::result _;
@@ -209,7 +211,7 @@ RoundUpPow2(size_t x)
  * size_t(-1), instead of the real difference.
  */
 template <class T>
-static JS_ALWAYS_INLINE size_t
+JS_ALWAYS_INLINE size_t
 PointerRangeSize(T *begin, T *end)
 {
     return (size_t(end) - size_t(begin)) / sizeof(T);
@@ -227,26 +229,6 @@ PointerRangeSize(T *begin, T *end)
  *      Called on overflow before the container returns NULL.
  */
 
-/*
- * Policy that calls JSContext:: memory functions and reports errors to the
- * context.  Since the JSContext* given on construction is stored for the
- * lifetime of the container, this policy may only be used for containers whose
- * lifetime is a shorter than the given JSContext.
- */
-class ContextAllocPolicy
-{
-    JSContext *mCx;
-
-  public:
-    ContextAllocPolicy(JSContext *cx) : mCx(cx) {}
-    JSContext *context() const { return mCx; }
-
-    void *malloc(size_t bytes) { return mCx->malloc(bytes); }
-    void free(void *p) { mCx->free(p); }
-    void *realloc(void *p, size_t bytes) { return mCx->realloc(p, bytes); }
-    void reportAllocOverflow() const { js_ReportAllocationOverflow(mCx); }
-};
-
 /* Policy for using system memory functions and doing no error reporting. */
 class SystemAllocPolicy
 {
@@ -255,6 +237,55 @@ class SystemAllocPolicy
     void *realloc(void *p, size_t bytes) { return ::realloc(p, bytes); }
     void free(void *p) { ::free(p); }
     void reportAllocOverflow() const {}
+};
+
+/*
+ * Small utility for lazily constructing objects without using dynamic storage.
+ * When a LazilyConstructed<T> is constructed, it is |empty()|, i.e., no value
+ * of T has been constructed and no T destructor will be called when the
+ * LazilyConstructed<T> is destroyed. Upon calling |construct|, a T object will
+ * be constructed with the given arguments and that object will be destroyed
+ * when the owning LazilyConstructed<T> is destroyed.
+ */
+template <class T>
+class LazilyConstructed
+{
+    char bytes[sizeof(T)];
+    bool constructed;
+    T &asT() { return *reinterpret_cast<T *>(bytes); }
+
+  public:
+    LazilyConstructed() : constructed(false) {}
+    ~LazilyConstructed() { if (constructed) asT().~T(); }
+
+    bool empty() const { return !constructed; }
+
+    void construct() {
+        JS_ASSERT(!constructed);
+        new(bytes) T();
+        constructed = true;
+    }
+
+    template <class T1>
+    void construct(const T1 &t1) {
+        JS_ASSERT(!constructed);
+        new(bytes) T(t1);
+        constructed = true;
+    }
+
+    template <class T1, class T2>
+    void construct(const T1 &t1, const T2 &t2) {
+        JS_ASSERT(!constructed);
+        new(bytes) T(t1, t2);
+        constructed = true;
+    }
+
+    template <class T1, class T2, class T3>
+    void construct(const T1 &t1, const T2 &t2, const T3 &t3) {
+        JS_ASSERT(!constructed);
+        new(bytes) T(t1, t2, t3);
+        constructed = true;
+    }
 };
 
 } /* namespace js */

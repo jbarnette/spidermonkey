@@ -1126,7 +1126,7 @@ XPCConvert::NativeInterface2JSObject(XPCLazyCallContext& lccx,
                 {
                     tryConstructSlimWrapper = PR_TRUE;
                 }
-                else if(!IS_WRAPPER_CLASS(STOBJ_GET_CLASS(flat)))
+                else if(IS_SLIM_WRAPPER_OBJECT(flat))
                 {
                     JSObject* global = JS_GetGlobalForObject(cx, flat);
                     if(global == xpcscope->GetGlobalJSObject())
@@ -1185,6 +1185,9 @@ XPCConvert::NativeInterface2JSObject(XPCLazyCallContext& lccx,
             }
         }
 
+        NS_ASSERTION(!flat || IS_WRAPPER_CLASS(STOBJ_GET_CLASS(flat)),
+                     "What kind of wrapper is this?");
+
         nsresult rv;
         XPCWrappedNative* wrapper;
         nsRefPtr<XPCWrappedNative> strongWrapper;
@@ -1200,7 +1203,7 @@ XPCConvert::NativeInterface2JSObject(XPCLazyCallContext& lccx,
 
             wrapper = strongWrapper;
         }
-        else if(IS_WRAPPER_CLASS(STOBJ_GET_CLASS(flat)))
+        else if(IS_WN_WRAPPER_OBJECT(flat))
         {
             wrapper = static_cast<XPCWrappedNative*>(xpc_GetJSPrivate(flat));
 
@@ -1349,7 +1352,7 @@ XPCConvert::NativeInterface2JSObject(XPCLazyCallContext& lccx,
 
                         destObj =
                             XPCNativeWrapper::GetNewOrUsed(ccx, wrapper,
-                                                           objPrincipal);
+                                                           scope, objPrincipal);
                         triedWrapping = JS_TRUE;
                     }
                     else if (flags & JSFILENAME_SYSTEM)
@@ -1359,7 +1362,7 @@ XPCConvert::NativeInterface2JSObject(XPCLazyCallContext& lccx,
                                "XPCSafeJSObjectWrapper\n");
 #endif
 
-                        if(XPC_SJOW_Construct(ccx, nsnull, 1, &v, &v))
+                        if(XPCSafeJSObjectWrapper::WrapObject(ccx, scope, v, &v))
                             destObj = JSVAL_TO_OBJECT(v);
                         triedWrapping = JS_TRUE;
                     }
@@ -1367,7 +1370,7 @@ XPCConvert::NativeInterface2JSObject(XPCLazyCallContext& lccx,
                     {
                         // Reaching across scopes from content code. Wrap
                         // the new object in a XOW.
-                        if (XPC_XOW_WrapObject(ccx, scope, &v))
+                        if (XPCCrossOriginWrapper::WrapObject(ccx, scope, &v))
                             destObj = JSVAL_TO_OBJECT(v);
                         triedWrapping = JS_TRUE;
                     }
@@ -1381,9 +1384,10 @@ XPCConvert::NativeInterface2JSObject(XPCLazyCallContext& lccx,
                         AUTO_MARK_JSVAL(ccx, &wrappedObjVal);
                         if(wrapper->NeedsChromeWrapper())
                         {
-                            if(!XPC_SOW_WrapObject(ccx, xpcscope->GetGlobalJSObject(),
-                                                   OBJECT_TO_JSVAL(destObj),
-                                                   &wrappedObjVal))
+                            using SystemOnlyWrapper::WrapObject;
+                            if(!WrapObject(ccx, xpcscope->GetGlobalJSObject(),
+                                           OBJECT_TO_JSVAL(destObj),
+                                           &wrappedObjVal))
                                 return JS_FALSE;
                         }
 
@@ -1397,7 +1401,7 @@ XPCConvert::NativeInterface2JSObject(XPCLazyCallContext& lccx,
             if(allowNativeWrapper &&
                !(flags & JSFILENAME_SYSTEM) &&
                !JS_IsSystemObject(ccx, flat) &&
-               XPC_XOW_ClassNeedsXOW(name))
+               XPCCrossOriginWrapper::ClassNeedsXOW(name))
             {
                 // From here on we might create new JSObjects, so we need to
                 // make sure that wrapper stays alive.
@@ -1405,10 +1409,10 @@ XPCConvert::NativeInterface2JSObject(XPCLazyCallContext& lccx,
                     strongWrapper = wrapper;
 
                 AUTO_MARK_JSVAL(ccx, &v);
-                return XPC_XOW_WrapObject(ccx, scope, &v) &&
+                return XPCCrossOriginWrapper::WrapObject(ccx, scope, &v) &&
                        (!wrapper->NeedsChromeWrapper() ||
-                        XPC_SOW_WrapObject(ccx, xpcscope->GetGlobalJSObject(),
-                                           v, &v)) &&
+                        SystemOnlyWrapper::WrapObject(ccx, xpcscope->GetGlobalJSObject(),
+                                                      v, &v)) &&
                        CreateHolderIfNeeded(ccx, JSVAL_TO_OBJECT(v), d, dest);
             }
 
@@ -1416,10 +1420,12 @@ XPCConvert::NativeInterface2JSObject(XPCLazyCallContext& lccx,
             if(allowNativeWrapper)
             {
                 if(wrapper->NeedsChromeWrapper())
-                    if(!XPC_SOW_WrapObject(ccx, xpcscope->GetGlobalJSObject(), v, d))
+                    if(!SystemOnlyWrapper::WrapObject(ccx,
+                                                      xpcscope->GetGlobalJSObject(),
+                                                      v, d))
                         return JS_FALSE;
                 if(wrapper->IsDoubleWrapper())
-                    if(!XPC_COW_WrapObject(ccx, xpcscope->GetGlobalJSObject(), v, d))
+                    if(!ChromeObjectWrapper::WrapObject(ccx, xpcscope->GetGlobalJSObject(), v, d))
                         return JS_FALSE;
             }
             if(dest)

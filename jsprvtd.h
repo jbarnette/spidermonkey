@@ -101,6 +101,7 @@ typedef struct JSParseNode          JSParseNode;
 typedef struct JSPropCacheEntry     JSPropCacheEntry;
 typedef struct JSProperty           JSProperty;
 typedef struct JSSharpObjectMap     JSSharpObjectMap;
+typedef struct JSEmptyScope         JSEmptyScope;
 typedef struct JSTempValueRooter    JSTempValueRooter;
 typedef struct JSThread             JSThread;
 typedef struct JSThreadData         JSThreadData;
@@ -108,7 +109,6 @@ typedef struct JSToken              JSToken;
 typedef struct JSTokenPos           JSTokenPos;
 typedef struct JSTokenPtr           JSTokenPtr;
 typedef struct JSTokenStream        JSTokenStream;
-typedef struct JSTraceMonitor       JSTraceMonitor;
 typedef struct JSTreeContext        JSTreeContext;
 typedef struct JSTryNote            JSTryNote;
 typedef struct JSWeakRoots          JSWeakRoots;
@@ -146,6 +146,10 @@ extern "C++" {
 
 namespace js {
 
+class TraceRecorder;
+class TraceMonitor;
+class CallStack;
+
 class ContextAllocPolicy;
 class SystemAllocPolicy;
 
@@ -158,6 +162,12 @@ class Vector;
 
 /* Common instantiations. */
 typedef js::Vector<jschar, 32> JSCharBuffer;
+
+static inline JSPropertyOp
+js_CastAsPropertyOp(JSObject *object)
+{
+    return JS_DATA_TO_FUNC_PTR(JSPropertyOp, object);
+}
 
 } /* export "C++" */
 #endif  /* __cplusplus */
@@ -369,24 +379,5 @@ extern JSBool js_CStringsAreUTF8;
  * elements in the array initializer.
  */
 #define JS_ARGS_LENGTH_MAX      (JS_BIT(24) - 1)
-
-#define DSLOTS_NULL_SHIFT                 8
-#define DSLOTS_NULL_RESIZE_SLOTS          ((jsval*)  (1 << DSLOTS_NULL_SHIFT))
-#define DSLOTS_NULL_ARRAY_FINALIZE        ((jsval*)  (2 << DSLOTS_NULL_SHIFT))
-#define DSLOTS_NULL_NEW_EMPTY_ARRAY       ((jsval*)  (3 << DSLOTS_NULL_SHIFT))
-#define DSLOTS_NULL_CLONE_BLOCK_OBJECT    ((jsval*)  (4 << DSLOTS_NULL_SHIFT))
-#define DSLOTS_NULL_SHRINK_SLOTS          ((jsval*)  (5 << DSLOTS_NULL_SHIFT))
-
-#define DSLOTS_NULL_INIT_OBJECT_NATIVE    ((jsval*)  (6 << DSLOTS_NULL_SHIFT))
-#define DSLOTS_NULL_INIT_OBJECT_NONNATIVE ((jsval*)  (7 << DSLOTS_NULL_SHIFT))
-#define DSLOTS_NULL_INIT_NATIVE           ((jsval*)  (8 << DSLOTS_NULL_SHIFT))
-#define DSLOTS_NULL_INIT_JSNATIVE         ((jsval*)  (9 << DSLOTS_NULL_SHIFT))
-#define DSLOTS_NULL_INIT_CLOSURE          ((jsval*) (10 << DSLOTS_NULL_SHIFT))
-
-#define DSLOTS_NULL_LIMIT                 (16 << DSLOTS_NULL_SHIFT)
-
-#define DSLOTS_IS_NOT_NULL(obj)           (uintptr_t(obj->dslots) >= DSLOTS_NULL_LIMIT)
-#define DSLOTS_NORMALIZE(obj) (DSLOTS_IS_NOT_NULL(obj) ? (obj)->dslots : NULL)
-#define DSLOTS_BUMP(obj)      (obj->dslots = (jsval*) (uintptr_t((obj)->dslots) | (1 << (DSLOTS_NULL_SHIFT-1))))
 
 #endif /* jsprvtd_h___ */

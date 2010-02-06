@@ -862,6 +862,9 @@ JS_realloc(JSContext *cx, void *p, size_t nbytes);
 extern JS_PUBLIC_API(void)
 JS_free(JSContext *cx, void *p);
 
+extern JS_PUBLIC_API(void)
+JS_updateMallocCounter(JSContext *cx, size_t nbytes);
+
 extern JS_PUBLIC_API(char *)
 JS_strdup(JSContext *cx, const char *s);
 
@@ -1114,11 +1117,9 @@ JS_MarkGCThing(JSContext *cx, void *thing, const char *name, void *arg);
 struct JSTracer {
     JSContext           *context;
     JSTraceCallback     callback;
-#ifdef DEBUG
     JSTraceNamePrinter  debugPrinter;
     const void          *debugPrintArg;
     size_t              debugPrintIndex;
-#endif
 };
 
 /*
@@ -1222,7 +1223,9 @@ JS_CallTracer(JSTracer *trc, void *thing, uint32 kind);
     JS_BEGIN_MACRO                                                            \
         (trc)->context = (cx_);                                               \
         (trc)->callback = (callback_);                                        \
-        JS_SET_TRACING_DETAILS(trc, NULL, NULL, (size_t)-1);                  \
+        (trc)->debugPrinter = NULL;                                           \
+        (trc)->debugPrintArg = NULL;                                          \
+        (trc)->debugPrintIndex = (size_t)-1;                                  \
     JS_END_MACRO
 
 extern JS_PUBLIC_API(void)
@@ -1320,6 +1323,15 @@ JS_SetGCParameterForThread(JSContext *cx, JSGCParamKey key, uint32 value);
 
 extern JS_PUBLIC_API(uint32)
 JS_GetGCParameterForThread(JSContext *cx, JSGCParamKey key);
+
+/*
+ * Flush the code cache for the current thread. The operation might be
+ * delayed if the cache cannot be flushed currently because native
+ * code is currently executing.
+ */
+
+extern JS_PUBLIC_API(void)
+JS_FlushCaches(JSContext *cx);
 
 /*
  * Add a finalizer for external strings created by JS_NewExternalString (see
@@ -2354,14 +2366,6 @@ extern JS_PUBLIC_API(JSBool)
 JS_IsConstructing(JSContext *cx);
 
 /*
- * Returns true if a script is executing and its current bytecode is a set
- * (assignment) operation, even if there are native (no script) stack frames
- * between the script and the caller to JS_IsAssigning.
- */
-extern JS_FRIEND_API(JSBool)
-JS_IsAssigning(JSContext *cx);
-
-/*
  * Saving and restoring frame chains.
  *
  * These two functions are used to set aside cx's call stack while that stack
@@ -2682,6 +2686,15 @@ struct JSErrorReport {
 #define JSREPORT_STRICT     0x4     /* error or warning due to strict option */
 
 /*
+ * This condition is an error in strict mode code, a warning if
+ * JS_HAS_STRICT_OPTION(cx), and otherwise should not be reported at
+ * all.  We check the strictness of the context's top frame's script;
+ * where that isn't appropriate, the caller should do the right checks
+ * itself instead of using this flag.
+ */
+#define JSREPORT_STRICT_MODE_ERROR 0x8
+
+/*
  * If JSREPORT_EXCEPTION is set, then a JavaScript-catchable exception
  * has been thrown for this runtime error, and the host should ignore it.
  * Exception-aware hosts should also check for JS_IsExceptionPending if
@@ -2691,6 +2704,8 @@ struct JSErrorReport {
 #define JSREPORT_IS_WARNING(flags)      (((flags) & JSREPORT_WARNING) != 0)
 #define JSREPORT_IS_EXCEPTION(flags)    (((flags) & JSREPORT_EXCEPTION) != 0)
 #define JSREPORT_IS_STRICT(flags)       (((flags) & JSREPORT_STRICT) != 0)
+#define JSREPORT_IS_STRICT_MODE_ERROR(flags) (((flags) &                      \
+                                              JSREPORT_STRICT_MODE_ERROR) != 0)
 
 extern JS_PUBLIC_API(JSErrorReporter)
 JS_SetErrorReporter(JSContext *cx, JSErrorReporter er);

@@ -465,7 +465,7 @@ XPCWrappedNative::GetNewOrUsed(XPCCallContext& ccx,
             JSObject *cached = cache->GetWrapper();
             if(cached)
             {
-                if(IS_SLIM_WRAPPER(cached))
+                if(IS_SLIM_WRAPPER_OBJECT(cached))
                 {
                     nsRefPtr<XPCWrappedNative> morphed;
                     if(!XPCWrappedNative::Morph(ccx, cached, Interface, cache,
@@ -784,7 +784,7 @@ XPCWrappedNative::GetUsedOnly(XPCCallContext& ccx,
     if(cache)
     {
         JSObject *flat = cache->GetWrapper();
-        if(flat && IS_SLIM_WRAPPER(flat) && !MorphSlimWrapper(ccx, flat))
+        if(flat && IS_SLIM_WRAPPER_OBJECT(flat) && !MorphSlimWrapper(ccx, flat))
            return NS_ERROR_FAILURE;
 
         wrapper = flat ?
@@ -1144,21 +1144,12 @@ XPCWrappedNative::Init(XPCCallContext& ccx,
 JSBool
 XPCWrappedNative::Init(XPCCallContext &ccx, JSObject *existingJSObject)
 {
-    mScriptableInfo = GetProto()->GetScriptableInfo();
-    JSClass* jsclazz = mScriptableInfo->GetJSClass();
-
     // Morph the existing object.
-#ifdef DEBUG
-    JSObject* protoJSObject = GetProto()->GetJSProtoObject();
-    NS_ASSERTION(protoJSObject->map->ops == jsclazz->getObjectOps(ccx, jsclazz),
-                 "Ugh, we can't deal with that!");
-#endif
+    if(!JS_SetReservedSlot(ccx, existingJSObject, 0, JSVAL_VOID))
+        return JS_FALSE;
 
+    mScriptableInfo = GetProto()->GetScriptableInfo();
     mFlatJSObject = existingJSObject;
-
-    // Make sure we preserve any flags borrowing bits in classword.
-    mFlatJSObject->classword ^= (jsuword)OBJ_GET_CLASS(ccx, mFlatJSObject);
-    mFlatJSObject->classword |= (jsuword)jsclazz;
 
     SLIM_LOG(("----- %i morphed slim wrapper (mFlatJSObject: %p, %p)\n",
               ++sMorphedSlimWrappers, mFlatJSObject,
@@ -1200,6 +1191,9 @@ XPCWrappedNative::FinishInit(XPCCallContext &ccx)
         DEBUG_ReportWrapperThreadSafetyError(ccx,
             "MainThread only wrapper created on the wrong thread", this);
 #endif
+
+    // A hack for bug 517665, increase the probability for GC.
+    JS_updateMallocCounter(ccx.GetJSContext(), 2 * sizeof(XPCWrappedNative));
 
     return JS_TRUE;
 }
@@ -1461,7 +1455,7 @@ XPCWrappedNative::ReparentWrapperIfFound(XPCCallContext& ccx,
     if(cache)
     {
         flat = cache->GetWrapper();
-        if(flat && !IS_SLIM_WRAPPER(flat))
+        if(flat && !IS_SLIM_WRAPPER_OBJECT(flat))
             wrapper = static_cast<XPCWrappedNative*>(xpc_GetJSPrivate(flat));
         
     }
@@ -1529,7 +1523,7 @@ XPCWrappedNative::ReparentWrapperIfFound(XPCCallContext& ccx,
 
         if(wrapper)
         {
-            if(!XPC_XOW_WrapperMoved(ccx, wrapper, aNewScope))
+            if(!XPCCrossOriginWrapper::WrapperMoved(ccx, wrapper, aNewScope))
             {
                 return NS_ERROR_FAILURE;
             }
@@ -1653,10 +1647,6 @@ XPCWrappedNative::GetWrappedNativeOfJSObject(JSContext* cx,
             if(proto)
                 protoClassInfo = proto->GetClassInfo();
         }
-        else if(IS_SLIM_WRAPPER_CLASS(funObjParentClass))
-        {
-            NS_ERROR("function object has slim wrapper!");
-        }
         else if(IS_WRAPPER_CLASS(funObjParentClass))
         {
             cur = funObjParent;
@@ -1681,34 +1671,27 @@ XPCWrappedNative::GetWrappedNativeOfJSObject(JSContext* cx,
         JSClass* clazz;
         clazz = STOBJ_GET_CLASS(cur);
 
-        if(IS_SLIM_WRAPPER_CLASS(clazz))
+        if(IS_WRAPPER_CLASS(clazz))
         {
+return_wrapper:
+            JSBool isWN = IS_WN_WRAPPER_OBJECT(cur);
+            XPCWrappedNative* wrapper =
+                isWN ? (XPCWrappedNative*) xpc_GetJSPrivate(cur) : nsnull;
             if(proto)
             {
                 XPCWrappedNativeProto* wrapper_proto =
-                    GetSlimWrapperProto(cur);
+                    isWN ? wrapper->GetProto() : GetSlimWrapperProto(cur);
+                XPCWrappedNativeScope* wrapper_scope =
+                    wrapper_proto ? wrapper_proto->GetScope() :
+                                    wrapper->GetScope();
                 if(proto != wrapper_proto &&
-                   (proto->GetScope() != wrapper_proto->GetScope() ||
+                   (proto->GetScope() != wrapper_scope ||
                     !protoClassInfo || !wrapper_proto ||
                     protoClassInfo != wrapper_proto->GetClassInfo()))
                     continue;
             }
             if(pobj2)
-                *pobj2 = cur;
-            return nsnull;
-        }
-        if(IS_WRAPPER_CLASS(clazz))
-        {
-return_wrapper:
-            XPCWrappedNative* wrapper =
-                (XPCWrappedNative*) xpc_GetJSPrivate(cur);
-            if(proto && proto != wrapper->GetProto() &&
-               (proto->GetScope() != wrapper->GetScope() ||
-                !protoClassInfo || !wrapper->GetProto() ||
-                protoClassInfo != wrapper->GetProto()->GetClassInfo()))
-                continue;
-            if(pobj2)
-                *pobj2 = cur;
+                *pobj2 = isWN ? nsnull : cur;
             return wrapper;
         }
 
@@ -1723,7 +1706,7 @@ return_tearoff:
                 protoClassInfo != wrapper->GetProto()->GetClassInfo()))
                 continue;
             if(pobj2)
-                *pobj2 = cur;
+                *pobj2 = nsnull;
             XPCWrappedNativeTearOff* to =
                 (XPCWrappedNativeTearOff*) xpc_GetJSPrivate(cur);
             if(!to)
@@ -1753,7 +1736,7 @@ return_tearoff:
         // Protect against infinite recursion through XOWs.
         JSObject *unsafeObj;
         clazz = STOBJ_GET_CLASS(outer);
-        if(clazz == &sXPC_XOW_JSClass.base &&
+        if(clazz == &XPCCrossOriginWrapper::XOWClass.base &&
            (unsafeObj = XPCWrapper::UnwrapXOW(cx, outer)))
         {
             outer = unsafeObj;
@@ -2247,6 +2230,8 @@ XPCWrappedNative::CallMethod(XPCCallContext& ccx,
     const nsXPTMethodInfo* methodInfo;
     uint8 requiredArgs;
     uint8 paramCount;
+    uint8 wantsOptArgc;
+    uint8 optArgcIndex = PR_UINT8_MAX;
     jsval src;
     nsresult invokeResult;
     nsID param_iid;
@@ -2359,16 +2344,22 @@ XPCWrappedNative::CallMethod(XPCCallContext& ccx,
         goto done;
     }
 
+    wantsOptArgc = methodInfo->WantsOptArgc() ? 1 : 0;
+
     // XXX ASSUMES that retval is last arg. The xpidl compiler ensures this.
     paramCount = methodInfo->GetParamCount();
     requiredArgs = paramCount;
     if(paramCount && methodInfo->GetParam(paramCount-1).IsRetval())
         requiredArgs--;
-    if(argc < requiredArgs)
+
+    if(argc < requiredArgs || wantsOptArgc)
     {
+        if(wantsOptArgc)
+            optArgcIndex = requiredArgs;
+
         // skip over any optional arguments
         while(requiredArgs && methodInfo->GetParam(requiredArgs-1).IsOptional())
-          requiredArgs--;
+            requiredArgs--;
 
         if(argc < requiredArgs) {
             Throw(NS_ERROR_XPC_NOT_ENOUGH_ARGS, ccx);
@@ -2377,9 +2368,9 @@ XPCWrappedNative::CallMethod(XPCCallContext& ccx,
     }
 
     // setup variant array pointer
-    if(paramCount > PARAM_BUFFER_COUNT)
+    if(paramCount + wantsOptArgc > PARAM_BUFFER_COUNT)
     {
-        if(!(dispatchParams = new nsXPTCVariant[paramCount]))
+        if(!(dispatchParams = new nsXPTCVariant[paramCount + wantsOptArgc]))
         {
             JS_ReportOutOfMemory(ccx);
             goto done;
@@ -2430,11 +2421,15 @@ XPCWrappedNative::CallMethod(XPCCallContext& ccx,
           NS_ASSERTION(i < argc || paramInfo.IsOptional(),
                        "Expected either enough arguments or an optional argument");
           jsval arg = i < argc ? argv[i] : JSVAL_NULL;
-          if(JSVAL_IS_PRIMITIVE(arg) ||
-             !JS_GetPropertyById(ccx, JSVAL_TO_OBJECT(arg),
-                                 rt->GetStringID(XPCJSRuntime::IDX_VALUE),
-                                 &src))
+          if((JSVAL_IS_PRIMITIVE(arg) ||
+              !JS_GetPropertyById(ccx, JSVAL_TO_OBJECT(arg),
+                                  rt->GetStringID(XPCJSRuntime::IDX_VALUE),
+                                  &src))
+             && i < argc)
           {
+              // Explicitly passed in unusable value for out param.  Note that
+              // if i >= argc we already know that |arg| is JSVAL_NULL, and
+              // that's ok.
               ThrowBadParam(NS_ERROR_XPC_NEED_OUT_OBJECT, i, ccx);
               goto done;
           }
@@ -2611,10 +2606,14 @@ XPCWrappedNative::CallMethod(XPCCallContext& ccx,
                   NS_ASSERTION(i < argc || paramInfo.IsOptional(),
                                "Expected either enough arguments or an optional argument");
                   jsval arg = i < argc ? argv[i] : JSVAL_NULL;
-                  if(JSVAL_IS_PRIMITIVE(arg) ||
-                     !JS_GetPropertyById(ccx, JSVAL_TO_OBJECT(arg),
-                         rt->GetStringID(XPCJSRuntime::IDX_VALUE), &src))
+                  if((JSVAL_IS_PRIMITIVE(arg) ||
+                      !JS_GetPropertyById(ccx, JSVAL_TO_OBJECT(arg),
+                          rt->GetStringID(XPCJSRuntime::IDX_VALUE), &src))
+                     && i < argc)
                   {
+                      // Explicitly passed in unusable value for out param.
+                      // Note that if i >= argc we already know that |arg| is
+                      // JSVAL_NULL, and that's ok.
                       ThrowBadParam(NS_ERROR_XPC_NEED_OUT_OBJECT, i, ccx);
                       goto done;
                   }
@@ -2702,11 +2701,29 @@ XPCWrappedNative::CallMethod(XPCCallContext& ccx,
         }
     }
 
+    // Fill in the optional_argc argument
+    if(wantsOptArgc)
+    {
+        nsXPTCVariant* dp = &dispatchParams[optArgcIndex];
+
+        if(optArgcIndex != paramCount)
+        {
+            // The method has a return value, the return value must be
+            // last so push it out one so that we'll have room to
+            // insert the optional argc argument.
+            dispatchParams[paramCount] = *dp;
+        }
+
+        dp->ClearFlags();
+        dp->type = nsXPTType::T_U8;
+        dp->val.u8 = argc - requiredArgs;
+    }
 
     // do the invoke
     {
         AutoJSSuspendNonMainThreadRequest req(ccx.GetJSContext());
-        invokeResult = NS_InvokeByIndex(callee, vtblIndex, paramCount,
+        invokeResult = NS_InvokeByIndex(callee, vtblIndex,
+                                        paramCount + wantsOptArgc,
                                         dispatchParams);
     }
 
@@ -2725,12 +2742,17 @@ XPCWrappedNative::CallMethod(XPCCallContext& ccx,
     // now we iterate through the native params to gather and convert results
     for(i = 0; i < paramCount; i++)
     {
+        uint8 dispatchParamIndex = i;
+
+        if (i >= optArgcIndex)
+            dispatchParamIndex++;
+
         const nsXPTParamInfo& paramInfo = methodInfo->GetParam(i);
         if(!paramInfo.IsOut() && !paramInfo.IsDipper())
             continue;
 
         const nsXPTType& type = paramInfo.GetType();
-        nsXPTCVariant* dp = &dispatchParams[i];
+        nsXPTCVariant* dp = &dispatchParams[dispatchParamIndex];
         jsval v = JSVAL_NULL;
         AUTO_MARK_JSVAL(ccx, &v);
         JSUint32 array_count;
@@ -2833,7 +2855,12 @@ done:
     {
         for(i = 0; i < paramCount; i++)
         {
-            nsXPTCVariant* dp = &dispatchParams[i];
+            uint8 dispatchParamIndex = i;
+
+            if (i >= optArgcIndex)
+                dispatchParamIndex++;
+
+            nsXPTCVariant* dp = &dispatchParams[dispatchParamIndex];
             void* p = dp->val.p;
             if(!p)
                 continue;
@@ -3827,13 +3854,14 @@ ConstructSlimWrapper(XPCCallContext &ccx, nsISupports *p, nsWrapperCache *cache,
 
     XPCNativeScriptableInfo* si = xpcproto->GetScriptableInfo();
     JSClass* jsclazz = si->GetSlimJSClass();
-    if(!jsclazz->addProperty)
+    if(!jsclazz)
         return JS_FALSE;
 
     wrapper = xpc_NewSystemInheritingJSObject(ccx, jsclazz,
                                               xpcproto->GetJSProtoObject(),
                                               parent);
-    if(!JS_SetPrivate(ccx, wrapper, identityObj) ||
+    if(!wrapper ||
+       !JS_SetPrivate(ccx, wrapper, identityObj) ||
        !JS_SetReservedSlot(ccx, wrapper, 0, PRIVATE_TO_JSVAL(xpcproto.get())))
         return JS_FALSE;
 

@@ -162,6 +162,7 @@ const char *const js_common_atom_names[] = {
     js_configurable_str,        /* configurableAtom             */
     js_writable_str,            /* writableAtom                 */
     js_value_str,               /* valueAtom                    */
+    "use strict",               /* useStrictAtom                */
 
 #if JS_HAS_XML_SUPPORT
     js_etago_str,               /* etagoAtom                    */
@@ -580,7 +581,6 @@ js_atom_sweeper(JSDHashTable *table, JSDHashEntryHdr *hdr,
                 uint32 number, void *arg)
 {
     JSAtomHashEntry *entry = TO_ATOM_ENTRY(hdr);
-    JSContext *cx = (JSContext *)arg;
 
     /* Remove uninitialized entries.  */
     if (entry->keyAndFlags == 0)
@@ -588,8 +588,8 @@ js_atom_sweeper(JSDHashTable *table, JSDHashEntryHdr *hdr,
 
     if (ATOM_ENTRY_FLAGS(entry) & (ATOM_PINNED | ATOM_INTERNED)) {
         /* Pinned or interned key cannot be finalized. */
-        JS_ASSERT(!js_IsAboutToBeFinalized(cx, ATOM_ENTRY_KEY(entry)));
-    } else if (js_IsAboutToBeFinalized(cx, ATOM_ENTRY_KEY(entry))) {
+        JS_ASSERT(!js_IsAboutToBeFinalized(ATOM_ENTRY_KEY(entry)));
+    } else if (js_IsAboutToBeFinalized(ATOM_ENTRY_KEY(entry))) {
         /* Remove entries with things about to be GC'ed. */
         return JS_DHASH_REMOVE;
     }
@@ -601,8 +601,8 @@ js_SweepAtomState(JSContext *cx)
 {
     JSAtomState *state = &cx->runtime->atomState;
 
-    JS_DHashTableEnumerate(&state->doubleAtoms, js_atom_sweeper, cx);
-    JS_DHashTableEnumerate(&state->stringAtoms, js_atom_sweeper, cx);
+    JS_DHashTableEnumerate(&state->doubleAtoms, js_atom_sweeper, NULL);
+    JS_DHashTableEnumerate(&state->stringAtoms, js_atom_sweeper, NULL);
 
     /*
      * Optimize for simplicity and mutate table generation numbers even if the
@@ -747,7 +747,7 @@ js_AtomizeString(JSContext *cx, JSString *str, uintN flags)
                     if (!key)
                         return NULL;
                 }
-           } else {
+            } else {
                 JS_ASSERT(str->isDependent());
                 if (!js_UndependString(cx, str))
                     return NULL;
@@ -1173,6 +1173,20 @@ JSAtomList::rawRemove(JSCompiler *jsc, JSAtomListElement *ale, JSHashEntry **hep
     }
 
     --count;
+}
+
+JSAutoAtomList::~JSAutoAtomList()
+{
+    if (table) {
+        JS_HashTableDestroy(table);
+    } else {
+        JSHashEntry *hep = list; 
+        while (hep) {
+            JSHashEntry *next = hep->next;
+            js_free_temp_entry(compiler, hep, HT_FREE_ENTRY);
+            hep = next;
+        }
+    }
 }
 
 JSAtomListElement *

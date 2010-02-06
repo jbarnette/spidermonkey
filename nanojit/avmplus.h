@@ -75,7 +75,7 @@
 #include <os2.h>
 #endif
 
-#if defined(DEBUG) || defined(MOZ_NO_VARADIC_MACROS)
+#if defined(DEBUG) || defined(NJ_NO_VARIADIC_MACROS)
 #if !defined _DEBUG
 #define _DEBUG
 #endif
@@ -92,15 +92,17 @@ void NanoAssertFail();
 #define AvmAssertMsg(x, y)
 #define AvmDebugLog(x) printf x
 
-#if defined(_M_IX86) || defined(_M_AMD64)
-// Visual C++ for x86 and x64 uses compiler intrinsics
-static inline unsigned __int64 rdtsc(void)
+#if defined(AVMPLUS_IA32)
+#if defined(_MSC_VER)
+__declspec(naked) static inline __int64 rdtsc()
 {
-    return __rdtsc();
+    __asm
+    {
+        rdtsc;
+        ret;
+    }
 }
-
-#elif defined(AVMPLUS_IA32)
-#if defined(SOLARIS)
+#elif defined(SOLARIS)
 static inline unsigned long long rdtsc(void)
 {
     unsigned long long int x;
@@ -123,6 +125,16 @@ static __inline__ uint64_t rdtsc(void)
   unsigned hi, lo;
   __asm__ __volatile__ ("rdtsc" : "=a"(lo), "=d"(hi));
   return ( (uint64_t)lo)|( ((uint64_t)hi)<<32 );
+}
+
+#elif defined(_MSC_VER) && defined(_M_AMD64)
+
+#include <intrin.h>
+#pragma intrinsic(__rdtsc)
+
+static inline unsigned __int64 rdtsc(void)
+{
+    return __rdtsc();
 }
 
 #elif defined(__powerpc__)
@@ -195,37 +207,39 @@ namespace avmplus {
     // Whether or not we can use SSE2 instructions and conditional moves.
         bool sse2;
         bool use_cmov;
+        // Whether to use a virtual stack pointer
+        bool fixed_esp;
 #endif
 
 #if defined (AVMPLUS_ARM)
         // Whether or not to generate VFP instructions.
 # if defined (NJ_FORCE_SOFTFLOAT)
-        static const bool vfp = false;
+        static const bool arm_vfp = false;
 # else
-        bool vfp;
+        bool arm_vfp;
 # endif
 
         // The ARM architecture version.
 # if defined (NJ_FORCE_ARM_ARCH_VERSION)
-        static const unsigned int arch = NJ_FORCE_ARM_ARCH_VERSION;
+        static const unsigned int arm_arch = NJ_FORCE_ARM_ARCH_VERSION;
 # else
-        unsigned int arch;
+        unsigned int arm_arch;
 # endif
 
         // Support for Thumb, even if it isn't used by nanojit. This is used to
         // determine whether or not to generate interworking branches.
 # if defined (NJ_FORCE_NO_ARM_THUMB)
-        static const bool thumb = false;
+        static const bool arm_thumb = false;
 # else
-        bool thumb;
+        bool arm_thumb;
 # endif
 
         // Support for Thumb2, even if it isn't used by nanojit. This is used to
         // determine whether or not to use some of the ARMv6T2 instructions.
 # if defined (NJ_FORCE_NO_ARM_THUMB2)
-        static const bool thumb2 = false;
+        static const bool arm_thumb2 = false;
 # else
-        bool thumb2;
+        bool arm_thumb2;
 # endif
 
 #endif
