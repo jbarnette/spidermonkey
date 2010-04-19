@@ -1,5 +1,5 @@
 /* -*- Mode: c++; c-basic-offset: 4; tab-width: 40; indent-tabs-mode: nil -*- */
-/* vim: set ts=40 sw=4 et tw=78: */
+/* vim: set ts=40 sw=4 et tw=99: */
 /* ***** BEGIN LICENSE BLOCK *****
  * Version: MPL 1.1/GPL 2.0/LGPL 2.1
  *
@@ -16,7 +16,7 @@
  * The Original Code is Mozilla WebGL impl
  *
  * The Initial Developer of the Original Code is
- *   Mozilla Corp
+ *   Mozilla Foundation
  * Portions created by the Initial Developer are Copyright (C) 2009
  * the Initial Developer. All Rights Reserved.
  *
@@ -64,6 +64,9 @@ struct JS_FRIEND_API(ArrayBuffer) {
     static JSBool class_constructor(JSContext *cx, JSObject *obj,
                                     uintN argc, jsval *argv, jsval *rval);
 
+    static bool create(JSContext *cx, JSObject *obj, uintN argc,
+                       jsval *argv, jsval *rval);
+
     static ArrayBuffer *fromJSObject(JSObject *obj);
 
     ArrayBuffer()
@@ -101,6 +104,14 @@ struct JS_FRIEND_API(TypedArray) {
         TYPE_INT32,
         TYPE_UINT32,
         TYPE_FLOAT32,
+        TYPE_FLOAT64,
+
+        /*
+         * Special type that's a uint8, but assignments are clamped to 0 .. 255.
+         * Treat the raw data type as a uint8.
+         */
+        TYPE_UINT8_CLAMPED,
+
         TYPE_MAX
     };
 
@@ -196,6 +207,15 @@ js_CreateTypedArrayWithArray(JSContext *cx, jsint atype, JSObject *arrayArg);
 JS_FRIEND_API(JSObject *)
 js_CreateTypedArrayWithBuffer(JSContext *cx, jsint atype, JSObject *bufArg,
                               jsint byteoffset, jsint length);
+
+/*
+ * Reparent a typed array to a new scope. This should only be used to reparent
+ * a typed array that does not share its underlying ArrayBuffer with another
+ * typed array to avoid having a parent mismatch with the other typed array and
+ * its ArrayBuffer.
+ */
+JS_FRIEND_API(JSBool)
+js_ReparentTypedArrayToScope(JSContext *cx, JSObject *obj, JSObject *scope);
 
 JS_END_EXTERN_C
 

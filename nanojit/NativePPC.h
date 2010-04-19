@@ -56,9 +56,11 @@ namespace nanojit
 {
 #define NJ_MAX_STACK_ENTRY              4096
 #define NJ_ALIGN_STACK                  16
+
 #define NJ_JTBL_SUPPORTED               1
 #define NJ_EXPANDED_LOADSTORE_SUPPORTED 0
 #define NJ_F2I_SUPPORTED                0
+#define NJ_SOFTFLOAT_SUPPORTED          0
 
     enum ConditionRegister {
         CR0 = 0,
@@ -160,7 +162,7 @@ namespace nanojit
         Rlr  = 8,
         Rctr = 9,
 
-        deprecated_UnknownReg = 127,
+        deprecated_UnknownReg = 127,    // XXX: remove eventually, see bug 538924
         FirstReg = R0,
         LastReg = F31
     };
@@ -285,7 +287,7 @@ namespace nanojit
         void nativePageSetup();                                             \
         void br(NIns *addr, int link);                                      \
         void br_far(NIns *addr, int link);                                  \
-        void asm_regarg(ArgSize, LIns*, Register);                          \
+        void asm_regarg(ArgType, LIns*, Register);                          \
         void asm_li(Register r, int32_t imm);                               \
         void asm_li32(Register r, int32_t imm);                             \
         void asm_li64(Register r, uint64_t imm);                            \

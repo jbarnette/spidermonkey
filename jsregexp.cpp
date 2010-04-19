@@ -74,6 +74,8 @@ using namespace avmplus;
 using namespace nanojit;
 #endif
 
+#include "jsobjinlines.h"
+
 using namespace js;
 
 typedef enum REOp {
@@ -178,7 +180,7 @@ struct RENode {
 
 typedef struct CompilerState {
     JSContext       *context;
-    JSTokenStream   *tokenStream; /* For reporting errors */
+    TokenStream     *tokenStream; /* For reporting errors */
     const jschar    *cpbegin;
     const jschar    *cpend;
     const jschar    *cp;
@@ -441,9 +443,8 @@ ReportRegExpErrorHelper(CompilerState *state, uintN flags, uintN errorNumber,
                         const jschar *arg)
 {
     if (state->tokenStream) {
-        return js_ReportCompileErrorNumber(state->context, state->tokenStream,
-                                           NULL, JSREPORT_UC | flags,
-                                           errorNumber, arg);
+        return ReportCompileErrorNumber(state->context, state->tokenStream,
+                                        NULL, JSREPORT_UC | flags, errorNumber, arg);
     }
     return JS_ReportErrorFlagsAndNumberUC(state->context, flags,
                                           js_GetErrorMessage, NULL,
@@ -502,7 +503,7 @@ ProcessOp(CompilerState *state, REOpData *opData, RENode **operandStack,
             (state->flags & JSREG_FOLD) == 0) {
             result->op = REOP_ALTPREREQ2;
             result->u.altprereq.ch1 = ((RENode *) result->u.kid2)->u.flat.chr;
-            result->u.altprereq.ch2 = ((RENode *) result->kid)->u.ucclass.index;
+            result->u.altprereq.ch2 = jschar(((RENode *) result->kid)->u.ucclass.index);
             /* ALTPREREQ2, <end>, uch1, uch2, <next>, ...,
                                             JUMP, <end> ... ENDALT */
             state->progLength += 13;
@@ -515,7 +516,7 @@ ProcessOp(CompilerState *state, REOpData *opData, RENode **operandStack,
             result->op = REOP_ALTPREREQ2;
             result->u.altprereq.ch1 = ((RENode *) result->kid)->u.flat.chr;
             result->u.altprereq.ch2 =
-                ((RENode *) result->u.kid2)->u.ucclass.index;
+                jschar(((RENode *) result->u.kid2)->u.ucclass.index);
             /* ALTPREREQ2, <end>, uch1, uch2, <next>, ...,
                                           JUMP, <end> ... ENDALT */
             state->progLength += 13;
@@ -934,7 +935,7 @@ CalculateBitmapSize(CompilerState *state, RENode *target, const jschar *src,
 
     while (src != end) {
         JSBool canStartRange = JS_TRUE;
-        uintN localMax = 0;
+        jschar localMax = 0;
 
         switch (*src) {
           case '\\':
@@ -987,7 +988,7 @@ lexHex:
                     }
                     n = (n << 4) | digit;
                 }
-                localMax = n;
+                localMax = jschar(n);
                 break;
               case 'd':
                 canStartRange = JS_FALSE;
@@ -1048,7 +1049,7 @@ lexHex:
                             src--;
                     }
                 }
-                localMax = n;
+                localMax = jschar(n);
                 break;
 
               default:
@@ -1089,8 +1090,8 @@ lexHex:
             for (i = rangeStart; i <= localMax; i++) {
                 jschar uch, dch;
 
-                uch = upcase(i);
-                dch = inverse_upcase(i);
+                uch = jschar(upcase(i));
+                dch = inverse_upcase(jschar(i));
                 maxch = JS_MAX(maxch, uch);
                 maxch = JS_MAX(maxch, dch);
             }
@@ -1098,9 +1099,9 @@ lexHex:
         }
 
         if (localMax > max)
-            max = localMax;
+            max = uintN(localMax);
     }
-    target->u.ucclass.bmsize = max;
+    target->u.ucclass.bmsize = uint16(max);
     return JS_TRUE;
 }
 
@@ -1958,7 +1959,7 @@ EmitREBytecode(CompilerState *state, JSRegExp *re, size_t treeDepth,
 }
 
 static JSBool
-CompileRegExpToAST(JSContext* cx, JSTokenStream* ts,
+CompileRegExpToAST(JSContext* cx, TokenStream* ts,
                    JSString* str, uintN flags, CompilerState& state)
 {
     uintN i;
@@ -1973,7 +1974,7 @@ CompileRegExpToAST(JSContext* cx, JSTokenStream* ts,
         return JS_FALSE;
     state.cpbegin = state.cp;
     state.cpend = state.cp + len;
-    state.flags = flags;
+    state.flags = uint16(flags);
     state.parenCount = 0;
     state.classCount = 0;
     state.progLength = 0;
@@ -2352,7 +2353,7 @@ class RegExpNativeCompiler {
         LIns* to_fail = lir->insBranch(LIR_jf, lir->ins2(LIR_plt, pos, cpend), 0);
         if (!fails.append(to_fail))
             return NULL;
-        LIns* text_ch = lir->insLoad(LIR_ldcs, pos, 0);
+        LIns* text_ch = lir->insLoad(LIR_ldzs, pos, 0, ACC_READONLY);
 
         // Extra characters that need to be compared against when doing folding.
         struct extra {
@@ -2491,7 +2492,7 @@ class RegExpNativeCompiler {
                                        0);
         if (!fails.append(to_fail))
             return NULL;
-        LIns* text_word = lir->insLoad(LIR_ld, pos, 0);
+        LIns* text_word = lir->insLoad(LIR_ld, pos, 0, ACC_OTHER);
         LIns* comp_word = useFastCI ?
             lir->ins2(LIR_or, text_word, lir->insImm(mask.i)) :
             text_word;
@@ -2573,7 +2574,7 @@ class RegExpNativeCompiler {
         LIns* to_fail = lir->insBranch(LIR_jf, lir->ins2(LIR_plt, pos, cpend), 0);
         if (!fails.append(to_fail))
             return NULL;
-        LIns* text_ch = lir->insLoad(LIR_ldcs, pos, 0);
+        LIns* text_ch = lir->insLoad(LIR_ldzs, pos, 0, ACC_READONLY);
         if (!fails.append(lir->insBranch(LIR_jf,
                                          lir->ins2(LIR_le, text_ch, lir->insImm(charSet->length)),
                                          0))) {
@@ -2581,7 +2582,8 @@ class RegExpNativeCompiler {
         }
         LIns* byteIndex = lir->ins_i2p(lir->ins2(LIR_rsh, text_ch, lir->insImm(3)));
         LIns* bitmap = lir->insImmPtr(bitmapData);
-        LIns* byte = lir->insLoad(LIR_ldcb, lir->ins2(LIR_piadd, bitmap, byteIndex), (int) 0);
+        LIns* byte = lir->insLoad(LIR_ldzb, lir->ins2(LIR_piadd, bitmap, byteIndex), (int) 0,
+                                  ACC_READONLY);
         LIns* bitMask = lir->ins2(LIR_lsh, lir->insImm(1),
                                lir->ins2(LIR_and, text_ch, lir->insImm(0x7)));
         LIns* test = lir->ins2(LIR_eq, lir->ins2(LIR_and, byte, bitMask), lir->insImm(0));
@@ -2600,7 +2602,7 @@ class RegExpNativeCompiler {
             chr = lir->ins2(LIR_lsh, chr, sizeLog2);
         }
         LIns *addr = lir->ins2(LIR_piadd, lir->insImmPtr(tbl), lir->ins_u2p(chr));
-        return lir->insLoad(LIR_ldcb, addr, 0);
+        return lir->insLoad(LIR_ldzb, addr, 0, ACC_READONLY);
     }
 
     /* Compile a builtin character class. */
@@ -2609,7 +2611,7 @@ class RegExpNativeCompiler {
         /* All the builtins checked below consume one character. */
         if (!fails.append(lir->insBranch(LIR_jf, lir->ins2(LIR_plt, pos, cpend), 0)))
             return NULL;
-        LIns *chr = lir->insLoad(LIR_ldcs, pos, 0);
+        LIns *chr = lir->insLoad(LIR_ldzs, pos, 0, ACC_READONLY);
 
         switch (node->op) {
           case REOP_DOT:
@@ -2834,7 +2836,7 @@ class RegExpNativeCompiler {
          * memory (REGlobalData::stateStack, since it is unused).
          */
         lir->insStorei(branchEnd, state,
-                       offsetof(REGlobalData, stateStack));
+                       offsetof(REGlobalData, stateStack), ACC_OTHER);
         LIns *leftSuccess = lir->insBranch(LIR_j, NULL, NULL);
 
         /* Try right branch. */
@@ -2842,13 +2844,12 @@ class RegExpNativeCompiler {
         if (!(branchEnd = compileNode(rightRe, pos, atEnd, fails)))
             return NULL;
         lir->insStorei(branchEnd, state,
-                       offsetof(REGlobalData, stateStack));
+                       offsetof(REGlobalData, stateStack), ACC_OTHER);
 
         /* Land success on the left branch. */
         targetCurrentPoint(leftSuccess);
         return addName(fragment->lirbuf,
-                       lir->insLoad(LIR_ldp, state,
-                                    offsetof(REGlobalData, stateStack)),
+                       lir->insLoad(LIR_ldp, state, offsetof(REGlobalData, stateStack), ACC_OTHER),
                        "pos");
     }
 
@@ -2858,19 +2859,18 @@ class RegExpNativeCompiler {
          * Since there are no phis, simulate by writing to and reading from
          * memory (REGlobalData::stateStack, since it is unused).
          */
-        lir->insStorei(pos, state, offsetof(REGlobalData, stateStack));
+        lir->insStorei(pos, state, offsetof(REGlobalData, stateStack), ACC_OTHER);
 
         /* Try ? body. */
         LInsList kidFails(cx);
         if (!(pos = compileNode(node, pos, atEnd, kidFails)))
             return NULL;
-        lir->insStorei(pos, state, offsetof(REGlobalData, stateStack));
+        lir->insStorei(pos, state, offsetof(REGlobalData, stateStack), ACC_OTHER);
 
         /* Join success and failure and get new position. */
         targetCurrentPoint(kidFails);
         pos = addName(fragment->lirbuf,
-                      lir->insLoad(LIR_ldp, state,
-                                   offsetof(REGlobalData, stateStack)),
+                      lir->insLoad(LIR_ldp, state, offsetof(REGlobalData, stateStack), ACC_OTHER),
                       "pos");
 
         return pos;
@@ -2925,13 +2925,13 @@ class RegExpNativeCompiler {
          * Since there are no phis, simulate by writing to and reading from
          * memory (REGlobalData::stateStack, since it is unused).
          */
-        lir->insStorei(pos, state, offsetof(REGlobalData, stateStack));
+        lir->insStorei(pos, state, offsetof(REGlobalData, stateStack), ACC_OTHER);
 
         /* Begin iteration: load loop variables. */
         LIns *loopTop = lir->ins0(LIR_label);
         LIns *iterBegin = addName(fragment->lirbuf,
                                   lir->insLoad(LIR_ldp, state,
-                                               offsetof(REGlobalData, stateStack)),
+                                               offsetof(REGlobalData, stateStack), ACC_OTHER),
                                   "pos");
 
         /* Match quantifier body. */
@@ -2951,7 +2951,7 @@ class RegExpNativeCompiler {
         }
 
         /* End iteration: store loop variables, increment, jump */
-        lir->insStorei(iterEnd, state, offsetof(REGlobalData, stateStack));
+        lir->insStorei(iterEnd, state, offsetof(REGlobalData, stateStack), ACC_OTHER);
         lir->insBranch(LIR_j, NULL, loopTop);
 
         /*
@@ -3049,7 +3049,7 @@ class RegExpNativeCompiler {
             return false;
 
         /* Fall-through from compileNode means success. */
-        lir->insStorei(pos, state, offsetof(REGlobalData, stateStack));
+        lir->insStorei(pos, state, offsetof(REGlobalData, stateStack), ACC_OTHER);
         lir->ins0(LIR_regfence);
         lir->ins1(LIR_ret, lir->insImm(1));
 
@@ -3088,7 +3088,7 @@ class RegExpNativeCompiler {
 
         /* Outer loop increment. */
         lir->insStorei(lir->ins2(LIR_piadd, start, lir->insImmWord(2)), state,
-                       offsetof(REGlobalData, skipped));
+                       offsetof(REGlobalData, skipped), ACC_OTHER);
 
         return !outOfMemory();
     }
@@ -3097,7 +3097,7 @@ class RegExpNativeCompiler {
     addName(LirBuffer* lirbuf, LIns* ins, const char* name)
     {
 #ifdef NJ_VERBOSE
-        debug_only_stmt(lirbuf->names->addName(ins, name);)
+        debug_only_stmt(lirbuf->printer->lirNameMap->addName(ins, name);)
 #endif
         return ins;
     }
@@ -3144,8 +3144,7 @@ class RegExpNativeCompiler {
     {
         fragment->lirbuf = lirbuf;
 #ifdef DEBUG
-        LabelMap* labels = new (tempAlloc) LabelMap(tempAlloc, &LogController);
-        lirbuf->names = new (tempAlloc) LirNameMap(tempAlloc, labels);
+        lirbuf->printer = new (tempAlloc) LInsPrinter(tempAlloc);
 #endif
     }
 
@@ -3187,13 +3186,13 @@ class RegExpNativeCompiler {
 #ifdef NJ_VERBOSE
         debug_only_stmt(
             if (LogController.lcbits & LC_TMRegexp) {
-                lir = verbose_filter = new VerboseWriter(tempAlloc, lir, lirbuf->names,
+                lir = verbose_filter = new VerboseWriter(tempAlloc, lir, lirbuf->printer,
                                                          &LogController);
             }
         )
 #endif
 #ifdef DEBUG
-        lir = validate_writer = new ValidateWriter(lir, "regexp writer pipeline");
+        lir = validate_writer = new ValidateWriter(lir, lirbuf->printer, "regexp writer pipeline");
 #endif
 
         /*
@@ -3222,8 +3221,7 @@ class RegExpNativeCompiler {
         })
 
         start = addName(lirbuf,
-                      lir->insLoad(LIR_ldp, state,
-                                   offsetof(REGlobalData, skipped)),
+                      lir->insLoad(LIR_ldp, state, offsetof(REGlobalData, skipped), ACC_OTHER),
                       "start");
 
         if (cs->flags & JSREG_STICKY) {
@@ -3247,8 +3245,7 @@ class RegExpNativeCompiler {
          */
         JS_ASSERT(!lirbuf->sp && !lirbuf->rp);
 
-        assm->compile(fragment, tempAlloc, /*optimize*/true
-                      verbose_only(, lirbuf->names->labels));
+        assm->compile(fragment, tempAlloc, /*optimize*/true verbose_only(, lirbuf->printer));
         if (assm->error() != nanojit::None)
             goto fail;
 
@@ -3283,7 +3280,7 @@ class RegExpNativeCompiler {
 #endif
 #ifdef NJ_VERBOSE
         debug_only_stmt( if (LogController.lcbits & LC_TMRegexp)
-                             delete lir; )
+                             delete verbose_filter; )
 #endif
         return JS_FALSE;
     }
@@ -3338,7 +3335,7 @@ GetNativeRegExp(JSContext* cx, JSRegExp* re)
 #endif
 
 JSRegExp *
-js_NewRegExp(JSContext *cx, JSTokenStream *ts,
+js_NewRegExp(JSContext *cx, TokenStream *ts,
              JSString *str, uintN flags, JSBool flat)
 {
     JSRegExp *re;
@@ -3404,7 +3401,7 @@ js_NewRegExp(JSContext *cx, JSTokenStream *ts,
             re = tmp;
     }
 
-    re->flags = flags;
+    re->flags = uint16(flags);
     re->parenCount = state.parenCount;
     re->source = str;
 
@@ -3887,9 +3884,9 @@ ProcessCharSet(JSContext *cx, JSRegExp *re, RECharSet *charSet)
                 for (i = rangeStart; i <= thisCh; i++) {
                     jschar uch, dch;
 
-                    AddCharacterToCharSet(charSet, i);
-                    uch = upcase(i);
-                    dch = inverse_upcase(i);
+                    AddCharacterToCharSet(charSet, jschar(i));
+                    uch = jschar(upcase(i));
+                    dch = inverse_upcase(jschar(i));
                     if (i != uch)
                         AddCharacterToCharSet(charSet, uch);
                     if (i != dch)
@@ -3901,7 +3898,7 @@ ProcessCharSet(JSContext *cx, JSRegExp *re, RECharSet *charSet)
             inRange = JS_FALSE;
         } else {
             if (re->flags & JSREG_FOLD) {
-                AddCharacterToCharSet(charSet, upcase(thisCh));
+                AddCharacterToCharSet(charSet, jschar(upcase(thisCh)));
                 AddCharacterToCharSet(charSet, inverse_upcase(thisCh));
             } else {
                 AddCharacterToCharSet(charSet, thisCh);
@@ -4976,7 +4973,7 @@ js_ExecuteRegExp(JSContext *cx, JSRegExp *re, JSString *str, size_t *indexp,
 
     res = &cx->regExpStatics;
     res->input = str;
-    res->parenCount = re->parenCount;
+    res->parenCount = uint16(re->parenCount);
     if (re->parenCount == 0) {
         res->lastParen = js_EmptySubString;
     } else {
@@ -5077,32 +5074,11 @@ out:
 
 /************************************************************************/
 
-static jsdouble
-GetRegExpLastIndex(JSObject *obj)
-{
-    JS_ASSERT(obj->getClass() == &js_RegExpClass);
-
-    jsval v = obj->fslots[JSSLOT_REGEXP_LAST_INDEX];
-    if (JSVAL_IS_INT(v))
-        return JSVAL_TO_INT(v);
-    JS_ASSERT(JSVAL_IS_DOUBLE(v));
-    return *JSVAL_TO_DOUBLE(v);
-}
-
-static jsval
-GetRegExpLastIndexValue(JSObject *obj)
-{
-    JS_ASSERT(obj->getClass() == &js_RegExpClass);
-    return obj->fslots[JSSLOT_REGEXP_LAST_INDEX];
-}
-
 static JSBool
 SetRegExpLastIndex(JSContext *cx, JSObject *obj, jsdouble lastIndex)
 {
-    JS_ASSERT(obj->getClass() == &js_RegExpClass);
-
-    return JS_NewNumberValue(cx, lastIndex,
-                             &obj->fslots[JSSLOT_REGEXP_LAST_INDEX]);
+    JS_ASSERT(obj->isRegExp());
+    return JS_NewNumberValue(cx, lastIndex, obj->addressOfRegExpLastIndex());
 }
 
 static JSBool
@@ -5113,14 +5089,14 @@ regexp_getProperty(JSContext *cx, JSObject *obj, jsval id, jsval *vp)
 
     if (!JSVAL_IS_INT(id))
         return JS_TRUE;
-    while (OBJ_GET_CLASS(cx, obj) != &js_RegExpClass) {
-        obj = OBJ_GET_PROTO(cx, obj);
+    while (obj->getClass() != &js_RegExpClass) {
+        obj = obj->getProto();
         if (!obj)
             return JS_TRUE;
     }
     slot = JSVAL_TO_INT(id);
     if (slot == REGEXP_LAST_INDEX) {
-        *vp = GetRegExpLastIndexValue(obj);
+        *vp = obj->getRegExpLastIndex();
         return JS_TRUE;
     }
 
@@ -5159,8 +5135,8 @@ regexp_setProperty(JSContext *cx, JSObject *obj, jsval id, jsval *vp)
     ok = JS_TRUE;
     if (!JSVAL_IS_INT(id))
         return ok;
-    while (OBJ_GET_CLASS(cx, obj) != &js_RegExpClass) {
-        obj = OBJ_GET_PROTO(cx, obj);
+    while (obj->getClass() != &js_RegExpClass) {
+        obj = obj->getProto();
         if (!obj)
             return JS_TRUE;
     }
@@ -5231,10 +5207,11 @@ js_InitRegExpStatics(JSContext *cx)
 
 JS_FRIEND_API(void)
 js_SaveAndClearRegExpStatics(JSContext *cx, JSRegExpStatics *statics,
-                             JSTempValueRooter *tvr)
+                             AutoValueRooter *tvr)
 {
     *statics = cx->regExpStatics;
-    JS_PUSH_TEMP_ROOT_STRING(cx, statics->input, tvr);
+    if (statics->input)
+        tvr->setString(statics->input);
     /*
      * Prevent JS_ClearRegExpStatics from freeing moreParens, since we've only
      * moved it elsewhere (into statics->moreParens).
@@ -5245,12 +5222,11 @@ js_SaveAndClearRegExpStatics(JSContext *cx, JSRegExpStatics *statics,
 
 JS_FRIEND_API(void)
 js_RestoreRegExpStatics(JSContext *cx, JSRegExpStatics *statics,
-                        JSTempValueRooter *tvr)
+                        AutoValueRooter *tvr)
 {
     /* Clear/free any new JSRegExpStatics data before clobbering. */
     JS_ClearRegExpStatics(cx);
     cx->regExpStatics = *statics;
-    JS_POP_TEMP_ROOT(cx, tvr);
 }
 
 void
@@ -5433,16 +5409,16 @@ js_XDRRegExpObject(JSXDRState *xdr, JSObject **objp)
         return JS_FALSE;
     }
     if (xdr->mode == JSXDR_DECODE) {
-        obj = js_NewObject(xdr->cx, &js_RegExpClass, NULL, NULL);
+        obj = NewObject(xdr->cx, &js_RegExpClass, NULL, NULL);
         if (!obj)
             return JS_FALSE;
-        STOBJ_CLEAR_PARENT(obj);
-        STOBJ_CLEAR_PROTO(obj);
+        obj->clearParent();
+        obj->clearProto();
         re = js_NewRegExp(xdr->cx, NULL, source, (uint8)flagsword, JS_FALSE);
         if (!re)
             return JS_FALSE;
         obj->setPrivate(re);
-        js_ClearRegExpLastIndex(obj);
+        obj->zeroRegExpLastIndex();
         *objp = obj;
     }
     return JS_TRUE;
@@ -5465,7 +5441,7 @@ regexp_trace(JSTracer *trc, JSObject *obj)
 JSClass js_RegExpClass = {
     js_RegExp_str,
     JSCLASS_HAS_PRIVATE |
-    JSCLASS_HAS_RESERVED_SLOTS(REGEXP_CLASS_FIXED_RESERVED_SLOTS) |
+    JSCLASS_HAS_RESERVED_SLOTS(JSObject::REGEXP_FIXED_RESERVED_SLOTS) |
     JSCLASS_MARK_IS_TRACE | JSCLASS_HAS_CACHED_PROTO(JSProto_RegExp),
     JS_PropertyStub,    JS_PropertyStub,
     JS_PropertyStub,    JS_PropertyStub,
@@ -5574,7 +5550,7 @@ regexp_compile_sub(JSContext *cx, JSObject *obj, uintN argc, jsval *argv,
              * from the original RegExp also).
              */
             obj2 = JSVAL_TO_OBJECT(argv[0]);
-            if (obj2 && OBJ_GET_CLASS(cx, obj2) == &js_RegExpClass) {
+            if (obj2 && obj2->getClass() == &js_RegExpClass) {
                 if (argc >= 2 && !JSVAL_IS_VOID(argv[1])) { /* 'flags' passed */
                     JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL,
                                          JSMSG_NEWREGEXP_FLAGGED);
@@ -5654,7 +5630,7 @@ created:
     JS_LOCK_OBJ(cx, obj);
     oldre = (JSRegExp *) obj->getPrivate();
     obj->setPrivate(re);
-    js_ClearRegExpLastIndex(obj);
+    obj->zeroRegExpLastIndex();
     JS_UNLOCK_OBJ(cx, obj);
     if (oldre)
         js_DestroyRegExp(cx, oldre);
@@ -5694,9 +5670,17 @@ regexp_exec_sub(JSContext *cx, JSObject *obj, uintN argc, jsval *argv,
     /* NB: we must reach out: after this paragraph, in order to drop re. */
     HOLD_REGEXP(cx, re);
     sticky = (re->flags & JSREG_STICKY) != 0;
-    lastIndex = (re->flags & (JSREG_GLOB | JSREG_STICKY))
-                ? GetRegExpLastIndex(obj)
-                : 0;
+    if (re->flags & (JSREG_GLOB | JSREG_STICKY)) {
+        jsval v = obj->getRegExpLastIndex();
+        if (JSVAL_IS_INT(v)) {
+            lastIndex = JSVAL_TO_INT(v);
+        } else {
+            JS_ASSERT(JSVAL_IS_DOUBLE(v));
+            lastIndex = *JSVAL_TO_DOUBLE(v);
+        }
+    } else {
+        lastIndex = 0;
+    }
     JS_UNLOCK_OBJ(cx, obj);
 
     /* Now that obj is unlocked, it's safe to (potentially) grab the GC lock. */
@@ -5727,7 +5711,7 @@ regexp_exec_sub(JSContext *cx, JSObject *obj, uintN argc, jsval *argv,
     }
 
     if (lastIndex < 0 || str->length() < lastIndex) {
-        js_ClearRegExpLastIndex(obj);
+        obj->zeroRegExpLastIndex();
         *rval = JSVAL_NULL;
     } else {
         i = (size_t) lastIndex;
@@ -5735,7 +5719,7 @@ regexp_exec_sub(JSContext *cx, JSObject *obj, uintN argc, jsval *argv,
         if (ok &&
             ((re->flags & JSREG_GLOB) || (*rval != JSVAL_NULL && sticky))) {
             if (*rval == JSVAL_NULL)
-                js_ClearRegExpLastIndex(obj);
+                obj->zeroRegExpLastIndex();
             else
                 ok = SetRegExpLastIndex(cx, obj, i);
         }
@@ -5785,13 +5769,13 @@ RegExp(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
          */
         if ((argc < 2 || JSVAL_IS_VOID(argv[1])) &&
             !JSVAL_IS_PRIMITIVE(argv[0]) &&
-            OBJ_GET_CLASS(cx, JSVAL_TO_OBJECT(argv[0])) == &js_RegExpClass) {
+            JSVAL_TO_OBJECT(argv[0])->getClass() == &js_RegExpClass) {
             *rval = argv[0];
             return JS_TRUE;
         }
 
         /* Otherwise, replace obj with a new RegExp object. */
-        obj = js_NewObject(cx, &js_RegExpClass, NULL, NULL);
+        obj = NewObject(cx, &js_RegExpClass, NULL, NULL);
         if (!obj)
             return JS_FALSE;
 
@@ -5833,8 +5817,8 @@ js_InitRegExpClass(JSContext *cx, JSObject *obj)
 }
 
 JSObject *
-js_NewRegExpObject(JSContext *cx, JSTokenStream *ts,
-                   jschar *chars, size_t length, uintN flags)
+js_NewRegExpObject(JSContext *cx, TokenStream *ts,
+                   const jschar *chars, size_t length, uintN flags)
 {
     JSString *str;
     JSObject *obj;
@@ -5843,38 +5827,40 @@ js_NewRegExpObject(JSContext *cx, JSTokenStream *ts,
     str = js_NewStringCopyN(cx, chars, length);
     if (!str)
         return NULL;
-    JSAutoTempValueRooter tvr(cx, str);
+    AutoValueRooter tvr(cx, str);
     re = js_NewRegExp(cx, ts,  str, flags, JS_FALSE);
     if (!re)
         return NULL;
-    obj = js_NewObject(cx, &js_RegExpClass, NULL, NULL);
+    obj = NewObject(cx, &js_RegExpClass, NULL, NULL);
     if (!obj) {
         js_DestroyRegExp(cx, re);
         return NULL;
     }
     obj->setPrivate(re);
-    js_ClearRegExpLastIndex(obj);
+    obj->zeroRegExpLastIndex();
     return obj;
 }
 
-JSObject *
-js_CloneRegExpObject(JSContext *cx, JSObject *obj, JSObject *parent)
+JSObject * JS_FASTCALL
+js_CloneRegExpObject(JSContext *cx, JSObject *obj, JSObject *proto)
 {
-    JSObject *clone;
-    JSRegExp *re;
-
-    JS_ASSERT(OBJ_GET_CLASS(cx, obj) == &js_RegExpClass);
-    clone = js_NewObject(cx, &js_RegExpClass, NULL, parent);
+    JS_ASSERT(obj->getClass() == &js_RegExpClass);
+    JS_ASSERT(proto);
+    JS_ASSERT(proto->getClass() == &js_RegExpClass);
+    JSObject *clone = NewObjectWithGivenProto(cx, &js_RegExpClass, proto, NULL);
     if (!clone)
         return NULL;
-    re = (JSRegExp *) obj->getPrivate();
-    if (re) {
-        clone->setPrivate(re);
-        js_ClearRegExpLastIndex(clone);
-        HOLD_REGEXP(cx, re);
-    }
+    JSRegExp *re = static_cast<JSRegExp *>(obj->getPrivate());
+    clone->setPrivate(re);
+    clone->zeroRegExpLastIndex();
+    HOLD_REGEXP(cx, re);
     return clone;
 }
+
+#ifdef JS_TRACER
+JS_DEFINE_CALLINFO_3(extern, OBJECT, js_CloneRegExpObject, CONTEXT, OBJECT, OBJECT, 0,
+                     ACC_STORE_ANY)
+#endif
 
 bool
 js_ContainsRegExpMetaChars(const jschar *chars, size_t length)
@@ -5891,4 +5877,10 @@ js_ContainsRegExpMetaChars(const jschar *chars, size_t length)
         }
     }
     return false;
+}
+
+JSBool
+js_ObjectIsRegExp(JSObject *obj)
+{
+    return obj->isRegExp();
 }

@@ -134,7 +134,7 @@ struct JSTitle {
 #ifdef JS_DEBUG_TITLE_LOCKS
 
 #define JS_SET_OBJ_INFO(obj_, file_, line_)                                   \
-    JS_SET_SCOPE_INFO(OBJ_SCOPE(obj_), file_, line_)
+    JS_SET_SCOPE_INFO((obj_)->scope(), file_, line_)
 
 #define JS_SET_SCOPE_INFO(scope_, file_, line_)                               \
     js_SetScopeInfo(scope_, file_, line_)
@@ -149,29 +149,28 @@ struct JSTitle {
 
 /*
  * NB: The JS_LOCK_OBJ and JS_UNLOCK_OBJ macros work *only* on native objects
- * (objects for which OBJ_IS_NATIVE returns true).  All uses of these macros in
- * the engine are predicated on OBJ_IS_NATIVE or equivalent checks.  These uses
+ * (objects for which obj->isNative() returns true).  All uses of these macros in
+ * the engine are predicated on obj->isNative or equivalent checks.  These uses
  * are for optimizations above the JSObjectOps layer, under which object locks
  * normally hide.
  */
 #define CX_OWNS_SCOPE_TITLE(cx,scope)   ((scope)->title.ownercx == (cx))
 
-#define JS_LOCK_OBJ(cx,obj)       (CX_OWNS_SCOPE_TITLE(cx, OBJ_SCOPE(obj))    \
-                                   ? (void)0                                  \
-                                   : (js_LockObj(cx, obj),                    \
-                                      JS_SET_OBJ_INFO(obj,__FILE__,__LINE__)))
-#define JS_UNLOCK_OBJ(cx,obj)     (CX_OWNS_SCOPE_TITLE(cx, OBJ_SCOPE(obj))    \
-                                   ? (void)0 : js_UnlockObj(cx, obj))
+#define JS_LOCK_OBJ(cx,obj)                                                   \
+    JS_BEGIN_MACRO                                                            \
+        JSObject *obj_ = (obj);                                               \
+        if (!CX_OWNS_SCOPE_TITLE(cx, obj_->scope())) {                        \
+            js_LockObj(cx, obj_);                                             \
+            JS_SET_OBJ_INFO(obj_, __FILE__, __LINE__);                        \
+        }                                                                     \
+    JS_END_MACRO
 
-/*
- * Lock object only if its scope has the given shape.
- */
-#define JS_LOCK_OBJ_IF_SHAPE(cx,obj,shape)                                    \
-    (OBJ_SHAPE(obj) == (shape)                                                \
-     ? (OBJ_SCOPE(obj)->title.ownercx == (cx)                                 \
-        ? true                                                                \
-        : js_LockObjIfShape(cx, obj, shape))                                  \
-     : false)
+#define JS_UNLOCK_OBJ(cx,obj)                                                 \
+    JS_BEGIN_MACRO                                                            \
+        JSObject *obj_ = (obj);                                               \
+        if (!CX_OWNS_SCOPE_TITLE(cx, obj_->scope()))                          \
+            js_UnlockObj(cx, obj_);                                           \
+    JS_END_MACRO
 
 #define JS_LOCK_TITLE(cx,title)                                               \
     ((title)->ownercx == (cx) ? (void)0                                       \
@@ -197,7 +196,6 @@ extern void js_LockRuntime(JSRuntime *rt);
 extern void js_UnlockRuntime(JSRuntime *rt);
 extern void js_LockObj(JSContext *cx, JSObject *obj);
 extern void js_UnlockObj(JSContext *cx, JSObject *obj);
-extern bool js_LockObjIfShape(JSContext *cx, JSObject *obj, uint32 shape);
 extern void js_InitTitle(JSContext *cx, JSTitle *title);
 extern void js_FinishTitle(JSContext *cx, JSTitle *title);
 extern void js_LockTitle(JSContext *cx, JSTitle *title);
@@ -267,9 +265,7 @@ extern void js_SetScopeInfo(JSScope *scope, const char *file, int line);
 #define CX_OWNS_SCOPE_TITLE(cx,obj) true
 #define JS_LOCK_OBJ(cx,obj)         ((void)0)
 #define JS_UNLOCK_OBJ(cx,obj)       ((void)0)
-#define JS_LOCK_OBJ_IF_SHAPE(cx,obj,shape) (OBJ_SHAPE(obj) == (shape))
 
-#define JS_LOCK_OBJ_VOID(cx,obj,e)  (e)
 #define JS_LOCK_SCOPE(cx,scope)     ((void)0)
 #define JS_UNLOCK_SCOPE(cx,scope)   ((void)0)
 #define JS_DROP_ALL_EMPTY_SCOPE_LOCKS(cx,scope) ((void)0)
@@ -294,6 +290,8 @@ extern void js_SetScopeInfo(JSScope *scope, const char *file, int line);
 #define JS_AWAIT_REQUEST_DONE(rt)   JS_WAIT_CONDVAR((rt)->requestDone,        \
                                                     JS_NO_TIMEOUT)
 #define JS_NOTIFY_REQUEST_DONE(rt)  JS_NOTIFY_CONDVAR((rt)->requestDone)
+
+#define CX_OWNS_OBJECT_TITLE(cx,obj) CX_OWNS_SCOPE_TITLE(cx, (obj)->scope())
 
 #ifndef JS_SET_OBJ_INFO
 #define JS_SET_OBJ_INFO(obj,f,l)        ((void)0)
@@ -326,5 +324,20 @@ js_CompareAndSwap(jsword *w, jsword ov, jsword nv)
 #endif /* JS_THREADSAFE */
 
 JS_END_EXTERN_C
+
+#if defined JS_THREADSAFE && defined __cplusplus
+namespace js {
+
+class AutoLock {
+  private:
+    JSLock *lock;
+
+  public:
+    AutoLock(JSLock *lock) : lock(lock) { JS_ACQUIRE_LOCK(lock); }
+    ~AutoLock() { JS_RELEASE_LOCK(lock); }
+};
+
+}
+#endif
 
 #endif /* jslock_h___ */

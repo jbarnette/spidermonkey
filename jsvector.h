@@ -229,6 +229,21 @@ class Vector : AllocPolicy
     union {
         BufferPtrs ptrs;
         char mBuf[sInlineBytes];
+
+#if __GNUC__
+        /*
+         * GCC thinks there is a strict aliasing warning since mBuf is a char
+         * array but we read and write to it as a T array. This is not an error
+         * since there are no reads and writes to the mBuf memory except those
+         * that treat it as a T array. Sadly,
+         *   #pragma GCC diagnostic ignore "-Wstrict-aliasing"
+         * doesn't silence the warning. Type punning is allowed through a union
+         * of the involved types, so, for now, this error can be silenced by
+         * adding each offending T to this union. (This won't work for non-POD
+         * T's, but there don't seem to be any with warnings yet...)
+         */
+        jschar unused1_;
+#endif
     } u;
 
     /* Only valid when usingInlineStorage() */
@@ -293,7 +308,7 @@ class Vector : AllocPolicy
 
 #ifdef DEBUG
     friend class ReentrancyGuard;
-    bool mEntered;
+    bool entered;
 #endif
 
     Vector(const Vector &);
@@ -318,42 +333,42 @@ class Vector : AllocPolicy
     }
 
     T *begin() {
-        JS_ASSERT(!mEntered);
+        JS_ASSERT(!entered);
         return usingInlineStorage() ? inlineBegin() : heapBegin();
     }
 
     const T *begin() const {
-        JS_ASSERT(!mEntered);
+        JS_ASSERT(!entered);
         return usingInlineStorage() ? inlineBegin() : heapBegin();
     }
 
     T *end() {
-        JS_ASSERT(!mEntered);
+        JS_ASSERT(!entered);
         return usingInlineStorage() ? inlineEnd() : heapEnd();
     }
 
     const T *end() const {
-        JS_ASSERT(!mEntered);
+        JS_ASSERT(!entered);
         return usingInlineStorage() ? inlineEnd() : heapEnd();
     }
 
     T &operator[](size_t i) {
-        JS_ASSERT(!mEntered && i < length());
+        JS_ASSERT(!entered && i < length());
         return begin()[i];
     }
 
     const T &operator[](size_t i) const {
-        JS_ASSERT(!mEntered && i < length());
+        JS_ASSERT(!entered && i < length());
         return begin()[i];
     }
 
     T &back() {
-        JS_ASSERT(!mEntered && !empty());
+        JS_ASSERT(!entered && !empty());
         return *(end() - 1);
     }
 
     const T &back() const {
-        JS_ASSERT(!mEntered && !empty());
+        JS_ASSERT(!entered && !empty());
         return *(end() - 1);
     }
 
@@ -365,11 +380,7 @@ class Vector : AllocPolicy
     /* Destroy elements in the range [begin() + incr, end()). */
     void shrinkBy(size_t incr);
 
-    /*
-     * Grow the vector by incr elements.  If T is a POD (as judged by
-     * tl::IsPodType), leave as uninitialized memory.  Otherwise, default
-     * construct each element.
-     */
+    /* Grow the vector by incr elements. */
     bool growBy(size_t incr);
 
     /* Call shrinkBy or growBy based on whether newSize > length(). */
@@ -424,7 +435,7 @@ inline
 Vector<T,N,AllocPolicy>::Vector(AllocPolicy ap)
   : AllocPolicy(ap), mLengthOrCapacity(0)
 #ifdef DEBUG
-    , mEntered(false)
+  , entered(false)
 #endif
 {}
 
@@ -558,8 +569,7 @@ Vector<T,N,AP>::growBy(size_t incr)
         size_t freespace = sInlineCapacity - inlineLength();
         if (incr <= freespace) {
             T *newend = inlineEnd() + incr;
-            if (!tl::IsPodType<T>::result)
-                Impl::initialize(inlineEnd(), newend);
+            Impl::initialize(inlineEnd(), newend);
             inlineLength() += incr;
             JS_ASSERT(usingInlineStorage());
             return true;
@@ -579,8 +589,7 @@ Vector<T,N,AP>::growBy(size_t incr)
     /* We are !usingInlineStorage(). Initialize new elements. */
     JS_ASSERT(heapCapacity() - heapLength() >= incr);
     T *newend = heapEnd() + incr;
-    if (!tl::IsPodType<T>::result)
-        Impl::initialize(heapEnd(), newend);
+    Impl::initialize(heapEnd(), newend);
     heapEnd() = newend;
     return true;
 }

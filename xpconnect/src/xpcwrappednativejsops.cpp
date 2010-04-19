@@ -853,7 +853,7 @@ XPC_WN_Equality(JSContext *cx, JSObject *obj, jsval v, JSBool *bp)
             return Throw(rv, cx);
 
         if(!*bp && !JSVAL_IS_PRIMITIVE(v) &&
-           STOBJ_GET_CLASS(JSVAL_TO_OBJECT(v)) == &XPCSafeJSObjectWrapper::SJOWClass.base)
+           JSVAL_TO_OBJECT(v)->getClass() == &XPCSafeJSObjectWrapper::SJOWClass.base)
         {
             v = OBJECT_TO_JSVAL(XPCSafeJSObjectWrapper::GetUnsafeObject(cx, JSVAL_TO_OBJECT(v)));
 
@@ -1327,7 +1327,7 @@ static JSBool
 XPC_WN_JSOp_Enumerate(JSContext *cx, JSObject *obj, JSIterateOp enum_op,
                       jsval *statep, jsid *idp)
 {
-    JSClass *clazz = STOBJ_GET_CLASS(obj);
+    JSClass *clazz = obj->getClass();
     if(!IS_WRAPPER_CLASS(clazz) || clazz == &XPC_WN_NoHelper_JSClass.base)
     {
         // obj must be a prototype object or a wrapper w/o a
@@ -1403,6 +1403,18 @@ XPC_WN_JSOp_Enumerate(JSContext *cx, JSObject *obj, JSIterateOp enum_op,
     // else call js_ObjectOps.enumerate...
 
     return js_ObjectOps.enumerate(cx, obj, enum_op, statep, idp);
+}
+
+static JSType
+XPC_WN_JSOp_TypeOf_Object(JSContext *cx, JSObject *obj)
+{
+    return JSTYPE_OBJECT;
+}
+
+static JSType
+XPC_WN_JSOp_TypeOf_Function(JSContext *cx, JSObject *obj)
+{
+    return JSTYPE_FUNCTION;
 }
 
 static void
@@ -1505,8 +1517,7 @@ XPC_WN_JSOp_ThisObject(JSContext *cx, JSObject *obj)
     JSStackFrame *fp;
     nsIPrincipal *principal = secMan->GetCxSubjectPrincipalAndFrame(cx, &fp);
 
-    jsval retval = OBJECT_TO_JSVAL(obj);
-    JSAutoTempValueRooter atvr(cx, 1, &retval);
+    js::AutoValueRooter retval(cx, obj);
 
     if(principal && fp)
     {
@@ -1523,7 +1534,7 @@ XPC_WN_JSOp_ThisObject(JSContext *cx, JSObject *obj)
         }
 
         nsresult rv = xpc->GetWrapperForObject(cx, obj, scope, principal, flags,
-                                               &retval);
+                                               retval.addr());
         if(NS_FAILED(rv))
         {
             XPCThrower::Throw(rv, cx);
@@ -1531,7 +1542,7 @@ XPC_WN_JSOp_ThisObject(JSContext *cx, JSObject *obj)
         }
     }
 
-    return JSVAL_TO_OBJECT(retval);
+    return JSVAL_TO_OBJECT(retval.value());
 }
 
 JSObjectOps *
@@ -1554,11 +1565,13 @@ JSBool xpc_InitWrappedNativeJSOps()
         XPC_WN_NoCall_JSOps.enumerate = XPC_WN_JSOp_Enumerate;
         XPC_WN_NoCall_JSOps.call = nsnull;
         XPC_WN_NoCall_JSOps.construct = nsnull;
+        XPC_WN_NoCall_JSOps.typeOf = XPC_WN_JSOp_TypeOf_Object;
         XPC_WN_NoCall_JSOps.clear = XPC_WN_JSOp_Clear;
         XPC_WN_NoCall_JSOps.thisObject = XPC_WN_JSOp_ThisObject;
 
         memcpy(&XPC_WN_WithCall_JSOps, &js_ObjectOps, sizeof(JSObjectOps));
         XPC_WN_WithCall_JSOps.enumerate = XPC_WN_JSOp_Enumerate;
+        XPC_WN_WithCall_JSOps.typeOf = XPC_WN_JSOp_TypeOf_Function;
         XPC_WN_WithCall_JSOps.clear = XPC_WN_JSOp_Clear;
         XPC_WN_WithCall_JSOps.thisObject = XPC_WN_JSOp_ThisObject;
     }
@@ -1594,7 +1607,8 @@ XPCNativeScriptableInfo::Construct(XPCCallContext& ccx,
     XPCNativeScriptableSharedMap* map = rt->GetNativeScriptableSharedMap();
     {   // scoped lock
         XPCAutoLock lock(rt->GetMapLock());
-        success = map->GetNewOrUsed(sci->GetFlags(), name, isGlobal, newObj);
+        success = map->GetNewOrUsed(sci->GetFlags(), name, isGlobal,
+                                    sci->GetInterfacesBitmap(), newObj);
     }
 
     if(!success)

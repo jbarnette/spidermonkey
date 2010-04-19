@@ -1,4 +1,4 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  *
  * ***** BEGIN LICENSE BLOCK *****
  * Version: MPL 1.1/GPL 2.0/LGPL 2.1
@@ -48,6 +48,7 @@
 #include "jsbit.h"
 #include "jsutil.h"
 #include "jstask.h"
+#include "jsversion.h"
 
 JS_BEGIN_EXTERN_C
 
@@ -230,12 +231,16 @@ typedef enum JSGCInvocationKind {
 extern void
 js_GC(JSContext *cx, JSGCInvocationKind gckind);
 
+extern void
+js_CallGCMarker(JSTracer *trc, void *thing, uint32 kind);
+
 /*
  * The kind of GC thing with a finalizer. The external strings follow the
  * ordinary string to simplify js_GetExternalStringGCType.
  */
 enum JSFinalizeGCThingKind {
     FINALIZE_OBJECT,
+    FINALIZE_ITER,
     FINALIZE_FUNCTION,
 #if JS_HAS_XML_SUPPORT
     FINALIZE_XML,
@@ -273,6 +278,12 @@ static inline JSObject *
 js_NewGCObject(JSContext *cx)
 {
     return (JSObject *) js_NewFinalizableGCThing(cx, FINALIZE_OBJECT);
+}
+
+static inline JSObject *
+js_NewGCIter(JSContext *cx)
+{
+    return (JSObject *) js_NewFinalizableGCThing(cx, FINALIZE_ITER);
 }
 
 static inline JSString *
@@ -423,15 +434,19 @@ struct JSGCStats {
     uint32  maxunmarked;/* maximum number of things with children to mark
                            later */
 #endif
-    uint32  maxlevel;   /* maximum GC nesting (indirect recursion) level */
-    uint32  poke;       /* number of potentially useful GC calls */
-    uint32  afree;      /* thing arenas freed so far */
-    uint32  stackseg;   /* total extraordinary stack segments scanned */
-    uint32  segslots;   /* total stack segment jsval slots scanned */
-    uint32  nclose;     /* number of objects with close hooks */
-    uint32  maxnclose;  /* max number of objects with close hooks */
-    uint32  closelater; /* number of close hooks scheduled to run */
-    uint32  maxcloselater; /* max number of close hooks scheduled to run */
+    uint32  maxlevel;       /* maximum GC nesting (indirect recursion) level */
+    uint32  poke;           /* number of potentially useful GC calls */
+    uint32  afree;          /* thing arenas freed so far */
+    uint32  stackseg;       /* total extraordinary stack segments scanned */
+    uint32  segslots;       /* total stack segment jsval slots scanned */
+    uint32  nclose;         /* number of objects with close hooks */
+    uint32  maxnclose;      /* max number of objects with close hooks */
+    uint32  closelater;     /* number of close hooks scheduled to run */
+    uint32  maxcloselater;  /* max number of close hooks scheduled to run */
+    uint32  nallarenas;     /* number of all allocated arenas */
+    uint32  maxnallarenas;  /* maximum number of all allocated arenas */
+    uint32  nchunks;        /* number of allocated chunks */
+    uint32  maxnchunks;     /* maximum number of allocated chunks */
 
     JSGCArenaStats  arenaStats[FINALIZE_LIMIT];
     JSGCArenaStats  doubleArenaStats;
@@ -450,5 +465,24 @@ extern void
 js_MarkTraps(JSTracer *trc);
 
 JS_END_EXTERN_C
+
+namespace js {
+
+void
+TraceObjectVector(JSTracer *trc, JSObject **vec, uint32 len);
+
+inline void
+TraceValues(JSTracer *trc, size_t len, jsval *vec, const char *name)
+{
+    for (jsval *vp = vec, *end = vp + len; vp < end; vp++) {
+        jsval v = *vp;
+        if (JSVAL_IS_TRACEABLE(v)) {
+            JS_SET_TRACING_INDEX(trc, name, vp - vec);
+            js_CallGCMarker(trc, JSVAL_TO_TRACEABLE(v), JSVAL_TRACE_KIND(v));
+        }
+    }
+}
+
+}
 
 #endif /* jsgc_h___ */

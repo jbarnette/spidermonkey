@@ -45,6 +45,7 @@
  */
 #include "jsprvtd.h"
 #include "jspubtd.h"
+#include "jsversion.h"
 
 JS_BEGIN_EXTERN_C
 
@@ -81,12 +82,6 @@ js_CloseIterator(JSContext *cx, jsval v);
  */
 extern JS_FRIEND_API(JSBool)
 js_CallIteratorNext(JSContext *cx, JSObject *iterobj, jsval *rval);
-
-/*
- * Close iterobj, whose class must be js_IteratorClass.
- */
-extern void
-js_CloseNativeIterator(JSContext *cx, JSObject *iterobj);
 
 extern JSBool
 js_ThrowStopIteration(JSContext *cx);
@@ -129,7 +124,7 @@ static inline bool
 js_ValueIsStopIteration(jsval v)
 {
     return !JSVAL_IS_PRIMITIVE(v) &&
-           STOBJ_GET_CLASS(JSVAL_TO_OBJECT(v)) == &js_StopIterationClass;
+           JSVAL_TO_OBJECT(v)->getClass() == &js_StopIterationClass;
 }
 
 extern JSObject *

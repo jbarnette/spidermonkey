@@ -88,27 +88,30 @@ typedef uint8  jsbytecode;
 typedef uint8  jssrcnote;
 typedef uint32 jsatomid;
 
+#ifdef __cplusplus
+
+/* Class and struct forward declarations in namespace js. */
+namespace js {
+struct Parser;
+struct Compiler;
+}
+
+#endif
+
 /* Struct typedefs. */
 typedef struct JSArgumentFormatMap  JSArgumentFormatMap;
 typedef struct JSCodeGenerator      JSCodeGenerator;
 typedef struct JSGCThing            JSGCThing;
 typedef struct JSGenerator          JSGenerator;
 typedef struct JSNativeEnumerator   JSNativeEnumerator;
-typedef struct JSCompiler           JSCompiler;
 typedef struct JSFunctionBox        JSFunctionBox;
 typedef struct JSObjectBox          JSObjectBox;
 typedef struct JSParseNode          JSParseNode;
-typedef struct JSPropCacheEntry     JSPropCacheEntry;
 typedef struct JSProperty           JSProperty;
 typedef struct JSSharpObjectMap     JSSharpObjectMap;
 typedef struct JSEmptyScope         JSEmptyScope;
-typedef struct JSTempValueRooter    JSTempValueRooter;
 typedef struct JSThread             JSThread;
 typedef struct JSThreadData         JSThreadData;
-typedef struct JSToken              JSToken;
-typedef struct JSTokenPos           JSTokenPos;
-typedef struct JSTokenPtr           JSTokenPtr;
-typedef struct JSTokenStream        JSTokenStream;
 typedef struct JSTreeContext        JSTreeContext;
 typedef struct JSTryNote            JSTryNote;
 typedef struct JSWeakRoots          JSWeakRoots;
@@ -147,8 +150,13 @@ extern "C++" {
 namespace js {
 
 class TraceRecorder;
-class TraceMonitor;
+struct TraceMonitor;
 class CallStack;
+
+class TokenStream;
+struct Token;
+struct TokenPos;
+struct TokenPtr;
 
 class ContextAllocPolicy;
 class SystemAllocPolicy;
@@ -158,6 +166,24 @@ template <class T,
           class AllocPolicy = ContextAllocPolicy>
 class Vector;
 
+template <class>
+struct DefaultHasher;
+
+template <class Key,
+          class Value,
+          class HashPolicy = DefaultHasher<Key>,
+          class AllocPolicy = ContextAllocPolicy>
+class HashMap;
+
+template <class T,
+          class HashPolicy = DefaultHasher<T>,
+          class AllocPolicy = ContextAllocPolicy>
+class HashSet;
+
+class DeflatedStringCache;
+
+class PropertyCache;
+struct PropertyCacheEntry;
 } /* namespace js */
 
 /* Common instantiations. */
@@ -267,31 +293,6 @@ typedef struct JSDebugHooks {
     void                *debugErrorHookData;
 } JSDebugHooks;
 
-/*
- * Type definitions for temporary GC roots that register with GC local C
- * variables. See jscntxt.h for details.
- */
-typedef void
-(* JSTempValueTrace)(JSTracer *trc, JSTempValueRooter *tvr);
-
-typedef union JSTempValueUnion {
-    jsval               value;
-    JSObject            *object;
-    JSXML               *xml;
-    JSTempValueTrace    trace;
-    JSScopeProperty     *sprop;
-    JSWeakRoots         *weakRoots;
-    JSCompiler          *compiler;
-    JSScript            *script;
-    jsval               *array;
-} JSTempValueUnion;
-
-struct JSTempValueRooter {
-    JSTempValueRooter   *down;
-    ptrdiff_t           count;
-    JSTempValueUnion    u;
-};
-
 /* JSObjectOps function pointer typedefs. */
 
 /*
@@ -371,13 +372,5 @@ typedef void
 #else
 extern JSBool js_CStringsAreUTF8;
 #endif
-
-/*
- * Maximum supported value of Arguments.length. It bounds the maximum number
- * of arguments that can be supplied to the function call using
- * Function.prototype.apply. This value also gives the maximum number of
- * elements in the array initializer.
- */
-#define JS_ARGS_LENGTH_MAX      (JS_BIT(24) - 1)
 
 #endif /* jsprvtd_h___ */

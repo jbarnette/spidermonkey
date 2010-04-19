@@ -186,13 +186,13 @@ Dump(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
     JSString *str;
     if (!argc)
         return JS_TRUE;
-    
+
     str = JS_ValueToString(cx, argv[0]);
     if (!str)
         return JS_FALSE;
 
-    char *bytes = JS_GetStringBytes(str);
-    fputs(bytes, stderr);
+    jschar *chars = JS_GetStringChars(str);
+    fputs(NS_ConvertUTF16toUTF8(reinterpret_cast<const PRUnichar*>(chars)).get(), stderr);
     return JS_TRUE;
 }
 
@@ -309,11 +309,14 @@ public:
 
     operator JSContext*() const {return mContext;}
 
-    JSCLContextHelper(); // not implemnted
 private:
     JSContext* mContext;
     intN       mContextThread;
     nsIThreadJSContextStack* mContextStack;
+
+    // prevent copying and assignment
+    JSCLContextHelper(const JSCLContextHelper &); // not implemented
+    const JSCLContextHelper& operator=(const JSCLContextHelper &); // not implemented
 };
 
 
@@ -324,10 +327,12 @@ public:
         {mContext = cx; mOldReporter = JS_SetErrorReporter(cx, reporter);}
     ~JSCLAutoErrorReporterSetter()
         {JS_SetErrorReporter(mContext, mOldReporter);} 
-    JSCLAutoErrorReporterSetter(); // not implemented
 private:
     JSContext* mContext;
     JSErrorReporter mOldReporter;
+    // prevent copying and assignment
+    JSCLAutoErrorReporterSetter(const JSCLAutoErrorReporterSetter &); // not implemented
+    const JSCLAutoErrorReporterSetter& operator=(const JSCLAutoErrorReporterSetter &); // not implemented
 };
 
 static nsresult

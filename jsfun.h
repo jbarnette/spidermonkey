@@ -128,7 +128,8 @@ typedef union JSLocalNames {
                               JS_ASSERT((fun)->flags & JSFUN_TRCINFO),        \
                               fun->u.n.trcinfo)
 
-struct JSFunction : public JSObject {
+struct JSFunction : public JSObject
+{
     uint16          nargs;        /* maximum number of specified arguments,
                                      reflected as f.length/f.arity */
     uint16          flags;        /* flags, see JSFUN_* below and in jsapi.h */
@@ -163,9 +164,9 @@ struct JSFunction : public JSObject {
     bool optimizedClosure() const { return FUN_KIND(this) > JSFUN_INTERPRETED; }
     bool needsWrapper()     const { return FUN_NULL_CLOSURE(this) && u.i.skipmin != 0; }
 
-    uintN countVars() const { 
+    uintN countVars() const {
         JS_ASSERT(FUN_INTERPRETED(this));
-        return u.i.nvars; 
+        return u.i.nvars;
     }
 
     uintN countArgsAndVars() const {
@@ -192,6 +193,10 @@ struct JSFunction : public JSObject {
     JSAtom *findDuplicateFormal() const;
 
     uint32 countInterpretedReservedSlots() const;
+
+    bool mightEscape() const {
+        return FUN_INTERPRETED(this) && (FUN_FLAT_CLOSURE(this) || u.i.nupvars == 0);
+    }
 };
 
 /*
@@ -209,7 +214,27 @@ struct JSFunction : public JSObject {
     JS_FN(name, fastcall, nargs, flags)
 #endif
 
+/*
+ * NB: the Arguments class is an uninitialized internal class that masquerades
+ * (according to Object.prototype.toString.call(argsobj)) as "Object".
+ *
+ * WARNING (to alert embedders reading this private .h file): arguments objects
+ * are *not* thread-safe and should not be used concurrently -- they should be
+ * used by only one thread at a time, preferably by only one thread over their
+ * lifetime (a JS worker that migrates from one OS thread to another but shares
+ * nothing is ok).
+ *
+ * Yes, this is an incompatible change, which prefigures the impending move to
+ * single-threaded objects and GC heaps.
+ */
 extern JSClass js_ArgumentsClass;
+
+inline bool
+JSObject::isArguments() const
+{
+    return getClass() == &js_ArgumentsClass;
+}
+
 extern JS_FRIEND_DATA(JSClass) js_CallClass;
 extern JSClass js_DeclEnvClass;
 extern const uint32 CALL_CLASS_FIXED_RESERVED_SLOTS;
@@ -223,21 +248,21 @@ JSObject::isFunction() const
     return getClass() == &js_FunctionClass;
 }
 
-#define HAS_FUNCTION_CLASS(obj) (obj)->isFunction()
-
 /*
  * NB: jsapi.h and jsobj.h must be included before any call to this macro.
  */
 #define VALUE_IS_FUNCTION(cx, v)                                              \
-    (!JSVAL_IS_PRIMITIVE(v) && HAS_FUNCTION_CLASS(JSVAL_TO_OBJECT(v)))
+    (!JSVAL_IS_PRIMITIVE(v) && JSVAL_TO_OBJECT(v)->isFunction())
 
 /*
  * Macro to access the private slot of the function object after the slot is
  * initialized.
  */
 #define GET_FUNCTION_PRIVATE(cx, funobj)                                      \
-    (JS_ASSERT(HAS_FUNCTION_CLASS(funobj)),                                   \
+    (JS_ASSERT((funobj)->isFunction()),                                       \
      (JSFunction *) (funobj)->getPrivate())
+
+namespace js {
 
 /*
  * Return true if this is a compiler-created internal function accessed by
@@ -245,22 +270,24 @@ JSObject::isFunction() const
  * or embedding code.
  */
 inline bool
-js_IsInternalFunctionObject(JSObject *funobj)
+IsInternalFunctionObject(JSObject *funobj)
 {
-    JS_ASSERT(HAS_FUNCTION_CLASS(funobj));
+    JS_ASSERT(funobj->isFunction());
     JSFunction *fun = (JSFunction *) funobj->getPrivate();
     return funobj == fun && (fun->flags & JSFUN_LAMBDA) && !funobj->getParent();
 }
+    
+struct ArgsPrivateNative;
 
-namespace js { struct ArgsPrivateNative; }
-
-inline js::ArgsPrivateNative *
-js_GetArgsPrivateNative(JSObject *argsobj)
+inline ArgsPrivateNative *
+GetArgsPrivateNative(JSObject *argsobj)
 {
-    JS_ASSERT(STOBJ_GET_CLASS(argsobj) == &js_ArgumentsClass);
+    JS_ASSERT(argsobj->isArguments());
     uintptr_t p = (uintptr_t) argsobj->getPrivate();
-    return (js::ArgsPrivateNative *) (p & 2 ? p & ~2 : NULL);
+    return (ArgsPrivateNative *) (p & 2 ? p & ~2 : NULL);
 }
+
+} /* namespace js */
 
 extern JSObject *
 js_InitFunctionClass(JSContext *cx, JSObject *obj);
@@ -279,7 +306,19 @@ extern void
 js_FinalizeFunction(JSContext *cx, JSFunction *fun);
 
 extern JSObject * JS_FASTCALL
-js_CloneFunctionObject(JSContext *cx, JSFunction *fun, JSObject *parent);
+js_CloneFunctionObject(JSContext *cx, JSFunction *fun, JSObject *parent,
+                       JSObject *proto);
+
+inline JSObject *
+CloneFunctionObject(JSContext *cx, JSFunction *fun, JSObject *parent)
+{
+    JS_ASSERT(parent);
+    JSObject *proto;
+    if (!js_GetClassPrototype(cx, parent, JSProto_Function, &proto))
+        return NULL;
+    JS_ASSERT(proto);
+    return js_CloneFunctionObject(cx, fun, parent, proto);
+}
 
 extern JS_REQUIRES_STACK JSObject *
 js_NewFlatClosure(JSContext *cx, JSFunction *fun);
@@ -322,7 +361,7 @@ extern void
 js_PutCallObject(JSContext *cx, JSStackFrame *fp);
 
 extern JSBool JS_FASTCALL
-js_PutCallObjectOnTrace(JSContext *cx, JSObject *scopeChain, uint32 nargs, jsval *argv, 
+js_PutCallObjectOnTrace(JSContext *cx, JSObject *scopeChain, uint32 nargs, jsval *argv,
                         uint32 nvars, jsval *slots);
 
 extern JSFunction *
@@ -375,24 +414,12 @@ inline bool
 js_IsNamedLambda(JSFunction *fun) { return (fun->flags & JSFUN_LAMBDA) && fun->atom; }
 
 /*
- * Reserved slot structure for Arguments objects:
- *
- * JSSLOT_PRIVATE       - the corresponding frame until the frame exits.
- * JSSLOT_ARGS_LENGTH   - the number of actual arguments and a flag indicating
- *                        whether arguments.length was overwritten.
- * JSSLOT_ARGS_CALLEE   - the arguments.callee value or JSVAL_HOLE if that was
- *                        overwritten.
- * JSSLOT_ARGS_COPY_START .. - room to store the corresponding arguments after
- *                        the frame exists. The slot's value will be JSVAL_HOLE
- *                        if arguments[i] was deleted or overwritten.
+ * Maximum supported value of arguments.length. It bounds the maximum number of
+ * arguments that can be supplied via the second (so-called |argArray|) param
+ * to Function.prototype.apply. This value also bounds the number of elements
+ * parsed in an array initialiser.
  */
-const uint32 JSSLOT_ARGS_LENGTH =               JSSLOT_PRIVATE + 1;
-const uint32 JSSLOT_ARGS_CALLEE =               JSSLOT_PRIVATE + 2;
-const uint32 JSSLOT_ARGS_COPY_START =           JSSLOT_PRIVATE + 3;
-
-/* Number of extra fixed slots besides JSSLOT_PRIVATE. */
-const uint32 ARGS_CLASS_FIXED_RESERVED_SLOTS =  JSSLOT_ARGS_COPY_START -
-                                                JSSLOT_ARGS_LENGTH;
+const uint32 JS_ARGS_LENGTH_MAX = JS_BIT(24) - 1;
 
 /*
  * JSSLOT_ARGS_LENGTH stores ((argc << 1) | overwritten_flag) as int jsval.
@@ -402,14 +429,21 @@ const uint32 ARGS_CLASS_FIXED_RESERVED_SLOTS =  JSSLOT_ARGS_COPY_START -
 JS_STATIC_ASSERT(JS_ARGS_LENGTH_MAX <= JS_BIT(30));
 JS_STATIC_ASSERT(jsval((JS_ARGS_LENGTH_MAX << 1) | 1) <= JSVAL_INT_MAX);
 
-JS_INLINE bool
-js_IsOverriddenArgsLength(JSObject *obj)
-{
-    JS_ASSERT(STOBJ_GET_CLASS(obj) == &js_ArgumentsClass);
+namespace js {
 
-    jsval v = obj->fslots[JSSLOT_ARGS_LENGTH];
-    return (JSVAL_TO_INT(v) & 1) != 0;
+inline jsval
+GetArgsSlot(JSObject *argsobj, uint32 arg)
+{
+    return argsobj->dslots[arg];
 }
+
+inline void
+SetArgsSlot(JSObject *argsobj, uint32 arg, jsval v)
+{
+    argsobj->dslots[arg] = v;
+}
+
+} /* namespace js */
 
 extern JSBool
 js_XDRFunctionObject(JSXDRState *xdr, JSObject **objp);

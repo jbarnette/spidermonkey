@@ -37,6 +37,8 @@
 #define avm_h___
 
 #include "VMPI.h"
+#include "njcpudetect.h"
+#include "njconfig.h"
 
 #if !defined(AVMPLUS_LITTLE_ENDIAN) && !defined(AVMPLUS_BIG_ENDIAN)
 #ifdef IS_BIG_ENDIAN
@@ -88,12 +90,11 @@
 void NanoAssertFail();
 #endif
 
-#define AvmAssert(x) assert(x)
-#define AvmAssertMsg(x, y)
-#define AvmDebugLog(x) printf x
-
 #if defined(AVMPLUS_IA32)
 #if defined(_MSC_VER)
+
+# define AVMPLUS_HAS_RDTSC 1
+
 __declspec(naked) static inline __int64 rdtsc()
 {
     __asm
@@ -102,23 +103,34 @@ __declspec(naked) static inline __int64 rdtsc()
         ret;
     }
 }
+
 #elif defined(SOLARIS)
+
+# define AVMPLUS_HAS_RDTSC 1
+
 static inline unsigned long long rdtsc(void)
 {
     unsigned long long int x;
     asm volatile (".byte 0x0f, 0x31" : "=A" (x));
     return x;
 }
+
 #elif defined(__i386__)
+
+# define AVMPLUS_HAS_RDTSC 1
+
 static __inline__ unsigned long long rdtsc(void)
 {
   unsigned long long int x;
      __asm__ volatile (".byte 0x0f, 0x31" : "=A" (x));
      return x;
 }
+
 #endif /* compilers */
 
 #elif defined(__x86_64__)
+
+# define AVMPLUS_HAS_RDTSC 1
 
 static __inline__ uint64_t rdtsc(void)
 {
@@ -129,6 +141,8 @@ static __inline__ uint64_t rdtsc(void)
 
 #elif defined(_MSC_VER) && defined(_M_AMD64)
 
+# define AVMPLUS_HAS_RDTSC 1
+
 #include <intrin.h>
 #pragma intrinsic(__rdtsc)
 
@@ -138,6 +152,8 @@ static inline unsigned __int64 rdtsc(void)
 }
 
 #elif defined(__powerpc__)
+
+# define AVMPLUS_HAS_RDTSC 1
 
 typedef unsigned long long int unsigned long long;
 
@@ -163,6 +179,10 @@ static __inline__ unsigned long long rdtsc(void)
 
 #endif /* architecture */
 
+#ifndef AVMPLUS_HAS_RDTSC
+# define AVMPLUS_HAS_RDTSC 0
+#endif
+
 struct JSContext;
 
 #ifdef PERFM
@@ -180,76 +200,6 @@ namespace avmplus {
     typedef int FunctionID;
 
     extern void AvmLog(char const *msg, ...);
-
-    class Config
-    {
-    public:
-        Config() {
-            memset(this, 0, sizeof(Config));
-#ifdef DEBUG
-            verbose = false;
-            verbose_addrs = 1;
-            verbose_exits = 1;
-            verbose_live = 1;
-            show_stats = 1;
-#endif
-        }
-
-        uint32_t tree_opt:1;
-        uint32_t quiet_opt:1;
-        uint32_t verbose:1;
-        uint32_t verbose_addrs:1;
-        uint32_t verbose_live:1;
-        uint32_t verbose_exits:1;
-        uint32_t show_stats:1;
-
-#if defined (AVMPLUS_IA32)
-    // Whether or not we can use SSE2 instructions and conditional moves.
-        bool sse2;
-        bool use_cmov;
-        // Whether to use a virtual stack pointer
-        bool fixed_esp;
-#endif
-
-#if defined (AVMPLUS_ARM)
-        // Whether or not to generate VFP instructions.
-# if defined (NJ_FORCE_SOFTFLOAT)
-        static const bool arm_vfp = false;
-# else
-        bool arm_vfp;
-# endif
-
-        // The ARM architecture version.
-# if defined (NJ_FORCE_ARM_ARCH_VERSION)
-        static const unsigned int arm_arch = NJ_FORCE_ARM_ARCH_VERSION;
-# else
-        unsigned int arm_arch;
-# endif
-
-        // Support for Thumb, even if it isn't used by nanojit. This is used to
-        // determine whether or not to generate interworking branches.
-# if defined (NJ_FORCE_NO_ARM_THUMB)
-        static const bool arm_thumb = false;
-# else
-        bool arm_thumb;
-# endif
-
-        // Support for Thumb2, even if it isn't used by nanojit. This is used to
-        // determine whether or not to use some of the ARMv6T2 instructions.
-# if defined (NJ_FORCE_NO_ARM_THUMB2)
-        static const bool arm_thumb2 = false;
-# else
-        bool arm_thumb2;
-# endif
-
-#endif
-
-#if defined (NJ_FORCE_SOFTFLOAT)
-        static const bool soft_float = true;
-#else
-        bool soft_float;
-#endif
-    };
 
     static const int kstrconst_emptyString = 0;
 
@@ -292,13 +242,13 @@ namespace avmplus {
         AvmInterpreter interp;
         AvmConsole console;
 
-        static Config config;
+        static nanojit::Config config;
 
 #ifdef AVMPLUS_IA32
         static inline bool
         use_sse2()
         {
-            return config.sse2;
+            return config.i386_sse2;
         }
 #endif
 
@@ -306,34 +256,17 @@ namespace avmplus {
         use_cmov()
         {
 #ifdef AVMPLUS_IA32
-            return config.use_cmov;
+            return config.i386_use_cmov;
 #else
         return true;
 #endif
         }
-
-        static inline bool
-        quiet_opt()
-        {
-            return config.quiet_opt;
-        }
-
-        static inline bool
-        verbose()
-        {
-            return config.verbose;
-        }
-
     };
 
     /**
      * Bit vectors are an efficent method of keeping True/False information
      * on a set of items or conditions. Class BitSet provides functions
      * to manipulate individual bits in the vector.
-     *
-     * Since most vectors are rather small an array of longs is used by
-     * default to house the value of the bits.  If more bits are needed
-     * then an array is allocated dynamically outside of this object.
      *
      * This object is not optimized for a fixed sized bit vector
      * it instead allows for dynamically growing the bit vector.
@@ -347,23 +280,19 @@ namespace avmplus {
             BitSet()
             {
                 capacity = kDefaultCapacity;
+                ar = (long*)calloc(capacity, sizeof(long));
                 reset();
             }
 
             ~BitSet()
             {
-                if (capacity > kDefaultCapacity)
-                    free(bits.ptr);
+                free(ar);
             }
 
             void reset()
             {
-                if (capacity > kDefaultCapacity)
-                    for(int i=0; i<capacity; i++)
-                        bits.ptr[i] = 0;
-                else
-                    for(int i=0; i<capacity; i++)
-                        bits.ar[i] = 0;
+                for (int i = 0; i < capacity; i++)
+                    ar[i] = 0;
             }
 
             void set(int bitNbr)
@@ -373,10 +302,7 @@ namespace avmplus {
                 if (index >= capacity)
                     grow(index+1);
 
-                if (capacity > kDefaultCapacity)
-                    bits.ptr[index] |= (1<<bit);
-                else
-                    bits.ar[index] |= (1<<bit);
+                ar[index] |= (1<<bit);
             }
 
             void clear(int bitNbr)
@@ -384,12 +310,7 @@ namespace avmplus {
                 int index = bitNbr / kUnit;
                 int bit = bitNbr % kUnit;
                 if (index < capacity)
-                {
-                    if (capacity > kDefaultCapacity)
-                        bits.ptr[index] &= ~(1<<bit);
-                    else
-                        bits.ar[index] &= ~(1<<bit);
-                }
+                    ar[index] &= ~(1<<bit);
             }
 
             bool get(int bitNbr) const
@@ -398,12 +319,7 @@ namespace avmplus {
                 int bit = bitNbr % kUnit;
                 bool value = false;
                 if (index < capacity)
-                {
-                    if (capacity > kDefaultCapacity)
-                        value = ( bits.ptr[index] & (1<<bit) ) ? true : false;
-                    else
-                        value = ( bits.ar[index] & (1<<bit) ) ? true : false;
-                }
+                    value = ( ar[index] & (1<<bit) ) ? true : false;
                 return value;
             }
 
@@ -414,35 +330,21 @@ namespace avmplus {
                 // create vector that is 2x bigger than requested
                 newCapacity *= 2;
                 //MEMTAG("BitVector::Grow - long[]");
-                long* newBits = (long*)calloc(1, newCapacity * sizeof(long));
-                //memset(newBits, 0, newCapacity * sizeof(long));
+                long* newAr = (long*)calloc(newCapacity, sizeof(long));
 
                 // copy the old one
-                if (capacity > kDefaultCapacity)
-                    for(int i=0; i<capacity; i++)
-                        newBits[i] = bits.ptr[i];
-                else
-                    for(int i=0; i<capacity; i++)
-                        newBits[i] = bits.ar[i];
+                for (int i = 0; i < capacity; i++)
+                    newAr[i] = ar[i];
 
                 // in with the new out with the old
-                if (capacity > kDefaultCapacity)
-                    free(bits.ptr);
+                free(ar);
 
-                bits.ptr = newBits;
+                ar = newAr;
                 capacity = newCapacity;
             }
 
-            // by default we use the array, but if the vector
-            // size grows beyond kDefaultCapacity we allocate
-            // space dynamically.
             int capacity;
-            union
-            {
-                long ar[kDefaultCapacity];
-                long*  ptr;
-            }
-            bits;
+            long* ar;
     };
 }
 
